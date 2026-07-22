@@ -56,6 +56,34 @@ export default function ClientDetailPage() {
     }
   }, [clientId]);
 
+  // --- Order History Tab ---
+  const clientOrders = useMemo(() =>
+    client ? [...orders.filter(o => o.clientId === client.id)].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    ) : [], [client, orders]);
+
+  // --- Ledger Tab ---
+  const ledgerEntries = useMemo(() => {
+    if (!client) return [];
+    const clientLedger = ledger.filter(l => l.clientId === client.id);
+    const entries: any[] = clientLedger.map(l => ({
+      id: l.id,
+      date: l.paymentDate || l.createdAt,
+      type: l.type,
+      description: l.description || (l.type === 'payment' ? `Payment received (${l.paymentMethod?.replace('_', ' ')})` : 'Daily Bill'),
+      debit: l.type === 'invoice' ? l.amount : 0,
+      credit: l.type === 'payment' ? l.amount : 0
+    }));
+    
+    entries.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    let bal = 0;
+    entries.forEach(e => {
+      bal += e.debit - e.credit;
+      e.balance = bal;
+    });
+    return entries;
+  }, [client, ledger]);
+
   if (!client) {
     return (
       <div className="max-w-5xl mx-auto pb-12 text-center py-24">
@@ -84,11 +112,7 @@ export default function ClientDetailPage() {
     p => p.status === 'active' && p.name.toLowerCase().includes(pricingSearch.toLowerCase())
   );
 
-  // --- Order History Tab ---
-  const clientOrders = useMemo(() =>
-    [...orders.filter(o => o.clientId === client.id)].sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    ), [client.id]);
+
 
   const filteredOrders = clientOrders.filter(o =>
     o.id.toLowerCase().includes(orderSearch.toLowerCase()) ||
@@ -101,26 +125,7 @@ export default function ClientDetailPage() {
   const totalCredit = client.totalPaid || 0;
   const balance = client.outstanding || 0;
 
-  const ledgerEntries = useMemo(() => {
-    if (!client) return [];
-    const clientLedger = ledger.filter(l => l.clientId === client.id);
-    const entries: any[] = clientLedger.map(l => ({
-      id: l.id,
-      date: l.paymentDate || l.createdAt,
-      type: l.type,
-      description: l.description || (l.type === 'payment' ? `Payment received (${l.paymentMethod?.replace('_', ' ')})` : 'Daily Bill'),
-      debit: l.type === 'invoice' ? l.amount : 0,
-      credit: l.type === 'payment' ? l.amount : 0
-    }));
-    
-    entries.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    let bal = 0;
-    entries.forEach(e => {
-      bal += e.debit - e.credit;
-      e.balance = bal;
-    });
-    return entries;
-  }, [client, ledger]);
+
 
   // --- Payments Tab ---
   const filteredPayments = clientPayments.filter(p => {
