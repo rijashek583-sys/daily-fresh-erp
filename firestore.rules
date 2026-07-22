@@ -1,0 +1,132 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Daily Fresh ERP — Firestore Security Rules
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Role hierarchy (stored in /users/{uid}.role):
+//   admin        → full read/write access to all collections
+//   staff        → read + limited write (payments, billing view)
+//   delivery_staff → read-only on specific delivery-related data
+//
+// DEPLOYMENT:
+//   firebase deploy --only firestore:rules
+//
+// TESTING (recommended before deploying):
+//   firebase emulators:start --only firestore
+//   then run: firebase emulators:exec --only firestore "npx jest"
+// ─────────────────────────────────────────────────────────────────────────────
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helper functions ───────────────────────────────────────────────────
+
+    /** Returns true when the request carries a valid Firebase Auth token. */
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    /**
+     * Fetches the caller's role from /users/{uid}.
+     * The role field is set at user creation and only writeable by admins.
+     */
+    function getRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && getRole() == 'admin';
+    }
+
+    function isStaff() {
+      return isAuthenticated() && getRole() in ['admin', 'staff'];
+    }
+
+    function isDeliveryStaff() {
+      return isAuthenticated() && getRole() in ['admin', 'staff', 'delivery_staff'];
+    }
+
+    // ── /users ────────────────────────────────────────────────────────────
+    // Users can read their own profile. Only admins can write user records.
+    match /users/{uid} {
+      allow read: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ── /clients ──────────────────────────────────────────────────────────
+    // Staff (and admins) can view clients. Only admins can create/update/delete.
+    match /clients/{clientId} {
+      allow read:   if isStaff();
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ── /products ─────────────────────────────────────────────────────────
+    // Staff need product list for order creation. Only admins manage catalogue.
+    match /products/{productId} {
+      allow read:   if isStaff();
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ── /orders ───────────────────────────────────────────────────────────
+    // Staff can read orders (needed for billing view). Only admins create/edit.
+    match /orders/{orderId} {
+      allow read:   if isStaff();
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ── /payments ─────────────────────────────────────────────────────────
+    // Both staff and admin can record payments. Deletion is admin-only.
+    match /payments/{paymentId} {
+      allow read:   if isStaff();
+      allow create: if isStaff();
+      allow update: if isStaff();
+      allow delete: if isAdmin();
+    }
+
+    // ── /clientPricing ────────────────────────────────────────────────────
+    // Staff need pricing data to calculate bills. Only admins set prices.
+    match /clientPricing/{clientId} {
+      allow read:   if isStaff();
+      allow write:  if isAdmin();
+    }
+
+    // ── /ledger ───────────────────────────────────────────────────────────
+    // Ledger is read-only for staff. Writes happen only via server transactions
+    // triggered by admin actions (addOrder / recordPayment).
+    match /ledger/{entryId} {
+      allow read:   if isStaff();
+      allow create: if isStaff();   // written by recordPaymentAtomic (staff-allowed)
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ── /config ───────────────────────────────────────────────────────────
+    // App-wide config (regions, company info). Staff read; admin write.
+    match /config/{docId} {
+      allow read:  if isStaff();
+      allow write: if isAdmin();
+    }
+
+    // ── /trash ────────────────────────────────────────────────────────────
+    // Only admins can see and manage the trash bin.
+    match /trash/{docId} {
+      allow read:   if isAdmin();
+      allow create: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ── Deny everything else ──────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -4,7 +4,7 @@ import { ProtectedRoute } from './ProtectedRoute';
 import { RequireAdmin } from './RequireAdmin';
 import AppShell from '../components/layout/AppShell';
 import LoginPage from '../features/auth/LoginPage';
-import FirebaseTestPage from '../features/auth/FirebaseTestPage';
+
 import { useAuthStore } from '../stores/authStore';
 
 function RootRedirect() {
@@ -51,7 +51,6 @@ function SuspenseWrapper({ children }: { children: React.ReactNode }) {
 
 const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
-  { path: '/test', element: <FirebaseTestPage /> },
   {
     element: <ProtectedRoute />,
     children: [{

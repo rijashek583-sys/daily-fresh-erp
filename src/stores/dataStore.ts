@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { Client, Product, Order, Payment, Region } from '../types';
 import { subscribeToCollection, subscribeToRegions, COLLECTIONS } from '../services/db';
-import { Unsubscribe } from 'firebase/firestore';
+import { type Unsubscribe, type FirestoreError } from 'firebase/firestore';
 
 interface DataState {
   clients: Client[];
@@ -13,6 +13,9 @@ interface DataState {
   trash: any[];
   ledger: any[];
   isLoaded: boolean;
+  /** Set when any Firestore realtime listener fails. Null when syncing normally. */
+  listenerError: string | null;
+  clearListenerError: () => void;
   initialize: () => () => void;
 }
 
@@ -26,45 +29,77 @@ export const useDataStore = create<DataState>((set) => ({
   trash: [],
   ledger: [],
   isLoaded: false,
+  listenerError: null,
+
+  clearListenerError: () => set({ listenerError: null }),
 
   initialize: () => {
     let unsubs: Unsubscribe[] = [];
 
-    const unsubClients = subscribeToCollection(COLLECTIONS.CLIENTS, (data) => {
-      set({ clients: data as Client[] });
-    });
-    
-    const unsubProducts = subscribeToCollection(COLLECTIONS.PRODUCTS, (data) => {
-      set({ products: data as Product[] });
-    });
-
-    const unsubOrders = subscribeToCollection(COLLECTIONS.ORDERS, (data) => {
-      set({ orders: data as Order[] });
-    });
-
-    const unsubPayments = subscribeToCollection(COLLECTIONS.PAYMENTS, (data) => {
-      set({ payments: data as Payment[] });
-    });
-
-    const unsubPricing = subscribeToCollection(COLLECTIONS.PRICING, (data) => {
-      const pricingMap: Record<string, Record<string, number>> = {};
-      data.forEach((doc: any) => {
-        pricingMap[doc.id] = doc.pricing || {};
+    /**
+     * Shared error handler for all Firestore realtime listeners.
+     * Surfaces the first failure in the UI via listenerError instead of
+     * silently swallowing errors and showing stale / empty data.
+     */
+    const handleListenerError = (collectionName: string) => (error: FirestoreError) => {
+      console.error(`Firestore listener error [${collectionName}]:`, error.code, error.message);
+      set({
+        listenerError: `Data sync failed for "${collectionName}" (${error.code}). Please refresh the page.`
       });
-      set({ clientPricing: pricingMap });
-    });
+    };
 
-    const unsubRegions = subscribeToRegions((data) => {
-      set({ regions: data });
-    });
+    const unsubClients = subscribeToCollection(
+      COLLECTIONS.CLIENTS,
+      (data) => set({ clients: data as Client[] }),
+      handleListenerError('clients')
+    );
 
-    const unsubTrash = subscribeToCollection('trash', (data) => {
-      set({ trash: data });
-    });
+    const unsubProducts = subscribeToCollection(
+      COLLECTIONS.PRODUCTS,
+      (data) => set({ products: data as Product[] }),
+      handleListenerError('products')
+    );
 
-    const unsubLedger = subscribeToCollection('ledger', (data) => {
-      set({ ledger: data });
-    });
+    const unsubOrders = subscribeToCollection(
+      COLLECTIONS.ORDERS,
+      (data) => set({ orders: data as Order[] }),
+      handleListenerError('orders')
+    );
+
+    const unsubPayments = subscribeToCollection(
+      COLLECTIONS.PAYMENTS,
+      (data) => set({ payments: data as Payment[] }),
+      handleListenerError('payments')
+    );
+
+    const unsubPricing = subscribeToCollection(
+      COLLECTIONS.PRICING,
+      (data) => {
+        const pricingMap: Record<string, Record<string, number>> = {};
+        data.forEach((doc: any) => {
+          pricingMap[doc.id] = doc.pricing || {};
+        });
+        set({ clientPricing: pricingMap });
+      },
+      handleListenerError('clientPricing')
+    );
+
+    const unsubRegions = subscribeToRegions(
+      (data) => set({ regions: data }),
+      handleListenerError('regions')
+    );
+
+    const unsubTrash = subscribeToCollection(
+      'trash',
+      (data) => set({ trash: data }),
+      handleListenerError('trash')
+    );
+
+    const unsubLedger = subscribeToCollection(
+      'ledger',
+      (data) => set({ ledger: data }),
+      handleListenerError('ledger')
+    );
 
     unsubs = [unsubClients, unsubProducts, unsubOrders, unsubPayments, unsubPricing, unsubRegions, unsubTrash, unsubLedger];
 

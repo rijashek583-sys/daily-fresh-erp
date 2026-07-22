@@ -4,7 +4,7 @@ import { Save, ArrowLeft, Plus, Search, X, MapPin } from 'lucide-react';
 import { Button, Card, PageHeader } from '../../components/ui';
 import { useDataStore } from '../../stores/dataStore';
 import { toast } from 'sonner';
-import { updateClient, saveClientPricing } from '../../services/db';
+import { updateClient, saveClientPricing, saveRegions } from '../../services/db';
 
 // ─── Add Region Modal ──────────────────────────────────────────────────────────
 function AddRegionModal({
@@ -23,14 +23,18 @@ function AddRegionModal({
     inputRef.current?.focus();
   }, []);
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     const trimmed = name.trim().toUpperCase();
     if (!trimmed) { setError('Region name is required.'); return; }
     if (regions.includes(trimmed)) { setError('This region already exists.'); return; }
-    regions.push(trimmed);
-    toast.success('Region created', { description: `"${trimmed}" is now available everywhere.` });
-    onCreated(trimmed);
-    onClose();
+    try {
+      await saveRegions([...regions, trimmed]);
+      toast.success('Region created', { description: `"${trimmed}" is now available everywhere.` });
+      onCreated(trimmed);
+      onClose();
+    } catch {
+      setError('Failed to create region. Please try again.');
+    }
   };
 
   return (

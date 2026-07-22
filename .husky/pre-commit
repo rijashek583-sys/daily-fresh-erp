@@ -1,0 +1,26 @@
+#!/bin/sh
+# ─── Daily Fresh ERP — Pre-commit security hook ───────────────────────────────
+# Blocks commits that include .env files containing real secrets.
+# This prevents Firebase API keys and other credentials from leaking into
+# the repository (see audit finding C-01).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Check if any staged files are .env files (not .env.example or .env.local.example)
+STAGED_ENV=$(git diff --cached --name-only | grep -E '^\.env$|^\.env\.local$|^\.env\.[^e].*$')
+
+if [ -n "$STAGED_ENV" ]; then
+  echo ""
+  echo "COMMIT BLOCKED - Sensitive .env file detected in staged changes:"
+  echo ""
+  echo "$STAGED_ENV"
+  echo ""
+  echo "   These files contain Firebase API keys and must NEVER be committed."
+  echo "   Use .env.local (already in .gitignore) for local secrets."
+  echo "   Use environment variables in your CI/CD pipeline for production."
+  echo ""
+  echo "   To unstage the file(s): git restore --staged .env"
+  echo ""
+  exit 1
+fi
+
+exit 0

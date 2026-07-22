@@ -11,7 +11,9 @@ import {
   Timestamp,
   addDoc,
   writeBatch,
-  runTransaction
+  runTransaction,
+  increment,
+  type FirestoreError
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { toast } from 'sonner';
@@ -42,13 +44,18 @@ export const COLLECTIONS = {
 };
 
 // Generic subscribe function
-export function subscribeToCollection(collectionName: string, callback: (data: any[]) => void) {
+export function subscribeToCollection(
+  collectionName: string,
+  callback: (data: any[]) => void,
+  onError?: (error: FirestoreError) => void
+) {
   const q = query(collection(db, collectionName));
   return onSnapshot(q, (snapshot) => {
     const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
     callback(data);
   }, (error) => {
     console.error(`Error subscribing to ${collectionName}:`, error);
+    onError?.(error);
   });
 }
 
@@ -144,7 +151,7 @@ export async function addOrder(orderData: any) {
     let newOrderId = '';
 
     await runTransaction(db, async (transaction) => {
-      // 1. Fetch Client
+      // 1. Fetch Client (single document read — safe inside transaction)
       const clientRef = doc(db, 'clients', clientId);
       const clientSnap = await transaction.get(clientRef);
       if (!clientSnap.exists()) throw new Error("Client not found");
@@ -160,7 +167,7 @@ export async function addOrder(orderData: any) {
       };
       transaction.set(orderRef, oData);
 
-      // 3. Create Ledger Transaction
+      // 3. Create Ledger entry
       const ledgerRef = doc(collection(db, 'ledger'));
       transaction.set(ledgerRef, {
         id: ledgerRef.id,
@@ -172,35 +179,14 @@ export async function addOrder(orderData: any) {
         createdAt: new Date().toISOString()
       });
 
-      // 4. Re-calculate Client Outstanding
-      const clientOrdersQuery = query(collection(db, COLLECTIONS.ORDERS), where("clientId", "==", clientId));
-      const clientPaymentsQuery = query(collection(db, COLLECTIONS.PAYMENTS), where("clientId", "==", clientId));
-      
-      const [ordersSnap, paymentsSnap] = await Promise.all([
-        getDocs(clientOrdersQuery),
-        getDocs(clientPaymentsQuery)
-      ]);
-      
-      let totalInvoiceAmount = total; // Include the new order
-      let totalOrdersCount = 1;
-      ordersSnap.forEach(doc => {
-        totalInvoiceAmount += (doc.data().total || 0);
-        totalOrdersCount++;
-      });
-      
-      let totalPaymentsReceived = 0;
-      paymentsSnap.forEach(doc => {
-        if (doc.data().status === 'completed' && !doc.data().deletedAt) {
-          totalPaymentsReceived += (doc.data().amount || 0);
-        }
-      });
-      
-      const newOutstanding = totalInvoiceAmount - totalPaymentsReceived;
-      
+      // 4. Atomically update client aggregates using increment() —
+      //    avoids getDocs inside transaction (race-condition) and the
+      //    double-counting bug where `total` was added both as a seed
+      //    value AND counted again in the ordersSnap loop.
       transaction.update(clientRef, {
-        outstanding: newOutstanding,
-        totalRevenue: totalInvoiceAmount,
-        totalOrders: totalOrdersCount
+        outstanding: increment(total),
+        totalRevenue: increment(total),
+        totalOrders:  increment(1),
       });
     });
 
@@ -388,13 +374,19 @@ export async function saveRegions(regions: string[]) {
   }
 }
 
-export function subscribeToRegions(callback: (regions: string[]) => void) {
+export function subscribeToRegions(
+  callback: (regions: string[]) => void,
+  onError?: (error: FirestoreError) => void
+) {
   return onSnapshot(doc(db, 'config', 'regions'), (snapshot) => {
     if (snapshot.exists()) {
       callback(snapshot.data().list || []);
     } else {
       callback([]);
     }
+  }, (error) => {
+    console.error('Error subscribing to regions:', error);
+    onError?.(error);
   });
 }
 
