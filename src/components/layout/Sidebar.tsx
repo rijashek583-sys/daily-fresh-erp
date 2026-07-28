@@ -26,7 +26,7 @@ export default function Sidebar() {
   const visible = navItems.filter(i => !i.adminOnly || isAdmin);
 
   return (
-    <aside className="fixed left-0 top-0 w-[280px] h-screen bg-[var(--color-bg)] border-r border-black/[0.04] dark:border-white/[0.04] flex flex-col z-30 transition-colors duration-300">
+    <aside className="fixed left-0 top-0 w-[280px] h-screen bg-[var(--color-bg)] border-r border-black/[0.04] dark:border-white/[0.04] hidden md:flex flex-col z-30 transition-colors duration-300">
       {/* Header / Logo */}
       <div className="flex items-center gap-4 h-20 px-8 shrink-0 border-b border-black/[0.04] dark:border-white/[0.04]">
         <div className="w-10 h-10 rounded-full bg-white dark:bg-gray-800 shadow-[var(--shadow-soft)] border border-black/[0.04] dark:border-white/[0.04] flex items-center justify-center overflow-hidden">

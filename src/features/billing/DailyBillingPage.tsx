@@ -486,12 +486,12 @@ export default function DailyBillingPage() {
           </Card>
         ) : (
           billingRows.map(row => (
-            <Card key={row.clientId} padding={false} className="flex flex-row items-center justify-between gap-4 px-6 py-4 hover:border-[var(--color-primary)]/30 hover:shadow-lg transition-all duration-300 h-[110px] overflow-hidden">
+            <Card key={row.clientId} padding={false} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4 px-4 sm:px-6 py-4 hover:border-[var(--color-primary)]/30 hover:shadow-lg transition-all duration-300 sm:h-[110px] overflow-hidden">
               
               {/* LEFT: Identity */}
-              <div className="flex flex-col justify-center min-w-[200px] h-full">
-                <h3 className="text-lg font-black text-[var(--color-text-main)] uppercase tracking-wide leading-tight truncate">{row.clientName}</h3>
-                <div className="flex items-center gap-2 mt-1">
+              <div className="flex flex-col justify-center min-w-0 flex-1 sm:min-w-[200px] sm:flex-none">
+                <h3 className="text-base sm:text-lg font-black text-[var(--color-text-main)] uppercase tracking-wide leading-tight truncate">{row.clientName}</h3>
+                <div className="flex items-center gap-2 mt-1 flex-wrap">
                   <span className="text-xs font-bold text-[var(--color-text-muted)] truncate">{row.billNumber}</span>
                   <span className="w-1 h-1 rounded-full bg-gray-300 dark:bg-gray-700"></span>
                   <span className="text-xs font-bold text-[var(--color-text-muted)] truncate">{row.region}</span>
@@ -499,32 +499,32 @@ export default function DailyBillingPage() {
               </div>
 
               {/* CENTER: Financials */}
-              <div className="flex-1 flex justify-end items-center px-6 h-full border-r border-gray-100 dark:border-white/[0.05]">
-                <div className="text-right">
+              <div className="sm:flex-1 flex sm:justify-end items-center sm:px-6 sm:h-full sm:border-r border-gray-100 dark:border-white/[0.05]">
+                <div className="text-left sm:text-right">
                   <span className="text-[10px] font-bold text-[var(--color-text-muted)] uppercase tracking-widest block mb-0.5">Grand Total</span>
-                  <span className="text-2xl font-black text-[var(--color-text-main)] leading-none">{formatCurrency(row.grandTotal)}</span>
+                  <span className="text-xl sm:text-2xl font-black text-[var(--color-text-main)] leading-none">{formatCurrency(row.grandTotal)}</span>
                 </div>
               </div>
 
               {/* RIGHT: Actions */}
-              <div className="flex items-center gap-3 shrink-0 h-full pl-2">
-                <Button 
+              <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 sm:gap-3 shrink-0 sm:h-full sm:pl-2">
+                <Button
                   onClick={() => handleOpenPaymentModal(row)}
                   variant="primary"
-                  className="rounded-full px-6"
+                  className="rounded-full px-4 sm:px-6 text-xs sm:text-sm"
                 >
                   Record Payment
                 </Button>
-                
-                <button 
+
+                <button
                   onClick={() => setViewBillRow(row)}
-                  className="flex items-center justify-center gap-2 px-4 py-2.5 bg-transparent hover:bg-gray-50 dark:hover:bg-gray-800 text-[var(--color-text-main)] rounded-full font-bold text-sm transition-colors border-2 border-gray-200 dark:border-gray-700 shadow-sm whitespace-nowrap"
+                  className="flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 sm:py-2.5 bg-transparent hover:bg-gray-50 dark:hover:bg-gray-800 text-[var(--color-text-main)] rounded-full font-bold text-xs sm:text-sm transition-colors border-2 border-gray-200 dark:border-gray-700 shadow-sm whitespace-nowrap"
                 >
-                  <Eye className="w-4 h-4" /> View Bill
+                  <Eye className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> View
                 </button>
-                <button 
+                <button
                   onClick={() => generatePDF(row)}
-                  className="flex items-center justify-center gap-2 px-4 py-2.5 bg-[var(--color-primary)] hover:bg-[var(--color-primary)]/90 text-white rounded-full font-bold text-sm transition-colors shadow-sm border-2 border-transparent whitespace-nowrap"
+                  className="flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 sm:py-2.5 bg-[var(--color-primary)] hover:bg-[var(--color-primary)]/90 text-white rounded-full font-bold text-xs sm:text-sm transition-colors shadow-sm border-2 border-transparent whitespace-nowrap"
                 >
                   <Download className="w-4 h-4" /> Download PDF
                 </button>

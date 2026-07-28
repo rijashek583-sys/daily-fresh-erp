@@ -194,7 +194,7 @@ export default function DashboardPage() {
       </div>
 
       {user?.role === 'admin' && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           label="Today's Revenue"
           value={formatCurrency(todaysRevenue)}
@@ -222,17 +222,17 @@ export default function DashboardPage() {
 
       {/* ─── TODAY'S PENDING COLLECTIONS ─── */}
       <Card padding={false} className="mb-8">
-        <div className="px-8 pt-8 pb-4 flex items-center justify-between">
+        <div className="px-4 sm:px-8 pt-6 sm:pt-8 pb-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-[var(--color-text-main)] tracking-tight">Pending Collections</h2>
-            <p className="text-sm font-medium text-[var(--color-text-muted)] mt-1">Unpaid invoices for the selected date</p>
+            <h2 className="text-base sm:text-lg font-semibold text-[var(--color-text-main)] tracking-tight">Pending Collections</h2>
+            <p className="text-sm font-medium text-[var(--color-text-muted)] mt-0.5">Unpaid invoices for the selected date</p>
           </div>
           <div className="flex items-center gap-3">
-            <input 
+            <input
               type="date"
               value={pendingDate}
               onChange={(e) => setPendingDate(e.target.value)}
-              className="px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm font-semibold text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] cursor-pointer"
+              className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm font-semibold text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] cursor-pointer"
             />
           </div>
         </div>
@@ -246,8 +246,8 @@ export default function DashboardPage() {
             <p className="text-sm font-semibold text-[var(--color-text-muted)]">All collections for the selected date have been completed.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm border-collapse">
+          <div className="overflow-x-auto -mx-0">
+            <table className="w-full text-sm border-collapse min-w-[600px]">
               <thead>
                 <tr className="border-b border-gray-100 dark:border-white/[0.04]">
                   {['Client', 'Division', 'Invoice Date', 'Invoice', 'Paid Today', 'Pending'].map((h, i) => (
@@ -312,9 +312,9 @@ export default function DashboardPage() {
 
       {user?.role === 'admin' && (
         <>
-          <div className="grid grid-cols-3 gap-8 items-stretch">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:gap-8 items-stretch">
         {/* Chart */}
-        <Card className="col-span-2 flex flex-col h-full" padding={false}>
+        <Card className="col-span-1 lg:col-span-2 flex flex-col h-full" padding={false}>
           <div className="px-8 pt-8 pb-4 flex items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold text-[var(--color-text-main)] tracking-tight">Revenue Overview</h2>
