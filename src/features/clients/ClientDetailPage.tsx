@@ -1,19 +1,21 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import {
-  ArrowLeft, Save, Search, BookOpen, TrendingUp, TrendingDown,
-  Download, CreditCard, Banknote, Smartphone, Building,
-  CheckCircle2, Clock, Package, ShoppingCart, Tags, FileText
+import { 
+  ArrowLeft, FileText, CheckCircle2, TrendingUp, TrendingDown, 
+  Package, Calendar, UserPlus, CreditCard, Check, Clock, Edit3, X,
+  Banknote, Smartphone, Building, ShoppingCart, Tags, Search, Save,
+  Download, BookOpen
 } from 'lucide-react';
-import { type PaymentMethod, type PaymentStatus } from '../../types';
+import { type PaymentMethod } from '../../types';
 import { useDataStore } from '../../stores/dataStore';
 import { Button, Badge, Card, StatusSelect } from '../../components/ui';
 import { formatCurrency, cn } from '../../lib/utils';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
-import { saveClientPricing } from '../../services/db';
+import { saveClientPricing, updatePayment } from '../../services/db';
 import { useAuthStore } from '../../stores/authStore';
-
+import { useDivisionStore } from '../../stores/divisionStore';
+import { getClientOutstanding, getClientMetrics } from '../../lib/billing';
 type Tab = 'general' | 'pricing' | 'orders' | 'ledger' | 'payments';
 
 const methodIcon: Record<PaymentMethod, React.ElementType> = {
@@ -42,10 +44,19 @@ export default function ClientDetailPage() {
   const [pricingState, setPricingState] = useState<Record<string, string>>({});
   const [pricingSearch, setPricingSearch] = useState('');
   const [orderSearch, setOrderSearch] = useState('');
-  const [paymentFilter, setPaymentFilter] = useState<'all' | PaymentStatus>('all');
+
+  const { activeDivision } = useDivisionStore();
+
+  // Payment Edit Modal State
+  const [editingPayment, setEditingPayment] = useState<any>(null);
+  const [editAmount, setEditAmount] = useState('');
+  const [editMethod, setEditMethod] = useState<PaymentMethod>('cash');
+  const [editReference, setEditReference] = useState('');
+  const [editNotes, setEditNotes] = useState('');
 
   const { user } = useAuthStore();
   const isAdmin = user?.role === 'admin';
+  const isStaff = user?.role === 'staff';
   const visibleTabs = TABS.filter(t => !t.adminOnly || isAdmin);
 
   // Load pricing when client is available
@@ -57,23 +68,39 @@ export default function ClientDetailPage() {
   }, [clientId]);
 
   // --- Order History Tab ---
-  const clientOrders = useMemo(() =>
-    client ? [...orders.filter(o => o.clientId === client.id)].sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    ) : [], [client, orders]);
+  const clientOrders = useMemo(() => {
+    if (!client) return [];
+    let list = orders.filter(o => o.clientId === client.id);
+    if (activeDivision !== 'all') {
+       list = list.filter(o => o.division === 'all' || o.division === activeDivision);
+    }
+    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [client, orders, activeDivision]);
 
   // --- Ledger Tab ---
   const ledgerEntries = useMemo(() => {
     if (!client) return [];
-    const clientLedger = ledger.filter(l => l.clientId === client.id);
-    const entries: any[] = clientLedger.map(l => ({
-      id: l.id,
-      date: l.paymentDate || l.createdAt,
-      type: l.type,
-      description: l.description || (l.type === 'payment' ? `Payment received (${l.paymentMethod?.replace('_', ' ')})` : 'Daily Bill'),
-      debit: l.type === 'invoice' ? l.amount : 0,
-      credit: l.type === 'payment' ? l.amount : 0
-    }));
+    const clientLedger = ledger.filter(l => {
+      if (l.clientId !== client.id) return false;
+      if (activeDivision !== 'all') {
+        const d = l.division;
+        if (d && d !== 'all' && d !== activeDivision) return false;
+      }
+      return true;
+    });
+    const entries: any[] = clientLedger.map(l => {
+      const rawDate = l.paymentDate || l.billDate || l.createdAt;
+      const parsedDate = new Date(rawDate.length === 10 ? `${rawDate}T12:00:00` : rawDate);
+      return {
+        id: l.id,
+        date: rawDate,
+        displayDate: format(parsedDate, l.type === 'invoice' ? 'MMM d, yyyy' : 'MMM d, yyyy h:mm a'),
+        type: l.type,
+        description: l.description || (l.type === 'payment' ? `Payment received (${l.paymentMethod?.replace('_', ' ')})` : 'Daily Bill'),
+        debit: l.type === 'invoice' ? l.amount : 0,
+        credit: l.type === 'payment' ? l.amount : 0
+      };
+    });
     
     entries.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
     let bal = 0;
@@ -82,7 +109,7 @@ export default function ClientDetailPage() {
       e.balance = bal;
     });
     return entries;
-  }, [client, ledger]);
+  }, [client, ledger, activeDivision]);
 
   if (!client) {
     return (
@@ -101,7 +128,9 @@ export default function ClientDetailPage() {
       if (!isNaN(num) && num > 0) newPricing[pid] = num;
     });
     try {
-      await saveClientPricing(client.id, newPricing);
+      if (client) {
+        await saveClientPricing(client.id, 'primary', newPricing);
+      }
       toast.success('Pricing saved!', { description: `Custom prices updated for ${client.name}` });
     } catch (e) {
       // error handled in db.ts
@@ -119,21 +148,41 @@ export default function ClientDetailPage() {
     o.createdAt.includes(orderSearch)
   );
 
-  // --- Ledger Tab ---
-  const clientPayments = payments.filter(p => p.clientId === client.id);
-  const totalDebit = client.totalRevenue || 0;
-  const totalCredit = client.totalPaid || 0;
-  const balance = client.outstanding || 0;
-
-
+  const metrics = getClientMetrics(client.id, activeDivision);
+  const totalDebit = metrics.totalInvoiced;
+  const totalCredit = metrics.totalPaid;
+  const balance = metrics.outstanding;
 
   // --- Payments Tab ---
-  const filteredPayments = clientPayments.filter(p => {
-    const matchStatus = paymentFilter === 'all' || p.status === paymentFilter;
-    return matchStatus;
+  const clientPayments = payments.filter(p => {
+    if (p.clientId !== client.id) return false;
+    if (activeDivision !== 'all' && p.division !== activeDivision) return false;
+    return true;
   });
-  const totalCollected = clientPayments.filter(p => p.status === 'completed').reduce((s, p) => s + p.amount, 0);
-  const totalPending = clientPayments.filter(p => p.status === 'pending').reduce((s, p) => s + p.amount, 0);
+  const totalCollected = totalCredit;
+  const totalPending = balance;
+
+  const handleSavePaymentEdit = async () => {
+    if (!editingPayment) return;
+    try {
+      const amount = parseFloat(editAmount);
+      if (isNaN(amount) || amount < 0) {
+        toast.error("Please enter a valid amount");
+        return;
+      }
+      await updatePayment(editingPayment.id, {
+        amount,
+        method: editMethod,
+        reference: editReference,
+        notes: editNotes,
+        updatedBy: isStaff ? 'Staff' : 'Admin'
+      });
+      toast.success("Payment updated successfully");
+      setEditingPayment(null);
+    } catch (e) {
+      // error handled in db.ts
+    }
+  };
 
   return (
     <div className="max-w-5xl mx-auto pb-12">
@@ -167,15 +216,17 @@ export default function ClientDetailPage() {
             </div>
           </div>
         </div>
-        <StatusSelect
-          value={client.status}
-          onChange={() => {}}
-          readonly={true}
-          options={[
-            { value: 'active', label: 'Active', dotClass: 'bg-green-500', bgClass: 'bg-green-100 dark:bg-green-950/40 border border-transparent', textClass: 'text-green-700 dark:text-green-400' },
-            { value: 'inactive', label: 'Inactive', dotClass: 'bg-red-500', bgClass: 'bg-red-100 dark:bg-red-950/40 border border-transparent', textClass: 'text-red-700 dark:text-red-400' }
-          ]}
-        />
+        <div className="flex items-center gap-4">
+          <StatusSelect
+            value={client.status}
+            onChange={() => {}}
+            readonly={true}
+            options={[
+              { value: 'active', label: 'Active', dotClass: 'bg-green-500', bgClass: 'bg-green-100 dark:bg-green-950/40 border border-transparent', textClass: 'text-green-700 dark:text-green-400' },
+              { value: 'inactive', label: 'Inactive', dotClass: 'bg-red-500', bgClass: 'bg-red-100 dark:bg-red-950/40 border border-transparent', textClass: 'text-red-700 dark:text-red-400' }
+            ]}
+          />
+        </div>
       </div>
 
       {/* Tabs */}
@@ -333,7 +384,7 @@ export default function ClientDetailPage() {
                 <table className="w-full text-sm border-collapse">
                   <thead>
                     <tr>
-                      {['Order ID', 'Date', 'Items', 'Total', 'Payment Status'].map(h => (
+                      {['Order ID', 'Date', 'Items', 'Total'].map(h => (
                         <th key={h} className="text-left px-6 py-4 text-xs font-semibold text-gray-400 uppercase tracking-widest border-b border-gray-100 dark:border-gray-800/60">{h}</th>
                       ))}
                     </tr>
@@ -356,21 +407,6 @@ export default function ClientDetailPage() {
                         </td>
                         <td className="px-6 py-4">
                           <span className="text-sm font-semibold text-[var(--color-text-main)]">{formatCurrency(o.total)}</span>
-                        </td>
-                        <td className="px-6 py-4">
-                          {(() => {
-                            const paymentStatus = o.paymentStatus || 'unpaid';
-                            return (
-                              <span className={cn(
-                                "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest inline-block",
-                                paymentStatus === 'paid' ? "bg-[var(--color-success-bg)] text-[var(--color-success)]" :
-                                paymentStatus === 'partial' ? "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400" :
-                                "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400"
-                              )}>
-                                {paymentStatus === 'paid' ? 'Paid' : paymentStatus === 'partial' ? 'Partial' : 'Unpaid'}
-                              </span>
-                            );
-                          })()}
                         </td>
                       </tr>
                     ))}
@@ -447,7 +483,7 @@ export default function ClientDetailPage() {
                   <tbody className="divide-y divide-gray-50 dark:divide-gray-800/40">
                     {ledgerEntries.map(entry => (
                       <tr key={entry.id} className="transition-colors hover:bg-gray-50/80 dark:hover:bg-gray-800/30">
-                        <td className="px-6 py-4 text-xs font-medium text-gray-500 whitespace-nowrap">{entry.date}</td>
+                        <td className="px-6 py-4 text-xs font-medium text-gray-500 whitespace-nowrap">{entry.displayDate}</td>
                         <td className="px-6 py-4"><Badge variant={entry.type === 'invoice' ? 'info' : 'success'}>{entry.type === 'invoice' ? 'Invoice' : 'Payment'}</Badge></td>
                         <td className="px-6 py-4"><p className="text-sm font-medium text-[var(--color-text-main)] max-w-[200px] truncate">{entry.description}</p></td>
                         <td className="px-6 py-4 text-right">{entry.debit > 0 ? <span className="text-sm font-semibold text-[var(--color-text-main)]">{formatCurrency(entry.debit)}</span> : <span className="text-gray-300 dark:text-gray-700">—</span>}</td>
@@ -503,30 +539,19 @@ export default function ClientDetailPage() {
           <Card padding={false} className="overflow-hidden">
             <div className="px-6 py-5 border-b border-gray-100 dark:border-white/[0.05] bg-gray-50/50 dark:bg-black/10 flex gap-4 items-center">
               <h2 className="text-base font-semibold text-[var(--color-text-main)] flex-1">Payment History</h2>
-              <div className="flex gap-2">
-                {(['all', 'completed', 'pending', 'failed'] as const).map(s => (
-                  <button
-                    key={s}
-                    onClick={() => setPaymentFilter(s)}
-                    className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-200 capitalize ${paymentFilter === s ? 'bg-[var(--color-primary)] text-white shadow-md shadow-red-500/20' : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700'}`}
-                  >
-                    {s === 'completed' ? 'Paid' : s}
-                  </button>
-                ))}
-              </div>
             </div>
-            {filteredPayments.length > 0 ? (
+            {clientPayments.length > 0 ? (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm border-collapse">
                   <thead>
                     <tr>
-                      {['Payment ID', 'Method', 'Reference', 'Amount', 'Status', 'Date'].map(h => (
+                      {['Payment ID', 'Method', 'Reference', 'Amount', 'Date', 'Actions'].map(h => (
                         <th key={h} className="text-left px-6 py-4 text-xs font-semibold text-gray-400 uppercase tracking-widest border-b border-gray-100 dark:border-gray-800/60">{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50 dark:divide-gray-800/40">
-                    {filteredPayments.map(p => {
+                    {clientPayments.map(p => {
                       const Icon = methodIcon[p.method];
                       return (
                         <tr key={p.id} className="transition-colors hover:bg-gray-50/80 dark:hover:bg-gray-800/30">
@@ -541,19 +566,22 @@ export default function ClientDetailPage() {
                           </td>
                           <td className="px-6 py-4">{p.reference ? <span className="font-mono text-[10px] font-medium text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded-md">{p.reference}</span> : <span className="text-gray-300 dark:text-gray-700">—</span>}</td>
                           <td className="px-6 py-4"><span className="text-sm font-semibold text-[var(--color-text-main)]">{formatCurrency(p.amount)}</span></td>
+                          <td className="px-6 py-4"><span className="text-xs font-medium text-gray-500">{format(new Date(p.createdAt), 'MMM d, yyyy h:mm a')}</span></td>
                           <td className="px-6 py-4">
-                            <StatusSelect
-                              value={p.status}
-                              onChange={() => {}}
-                              readonly={true}
-                              options={[
-                                { value: 'completed', label: 'Paid', dotClass: 'bg-green-500', bgClass: 'bg-green-100 dark:bg-green-950/40 border border-transparent', textClass: 'text-green-700 dark:text-green-400' },
-                                { value: 'pending', label: 'Pending', dotClass: 'bg-amber-500', bgClass: 'bg-amber-100 dark:bg-amber-950/40 border border-transparent', textClass: 'text-amber-700 dark:text-amber-400' },
-                                { value: 'failed', label: 'Failed', dotClass: 'bg-red-500', bgClass: 'bg-red-100 dark:bg-red-950/40 border border-transparent', textClass: 'text-red-700 dark:text-red-400' }
-                              ]}
-                            />
+                            <Button 
+                              variant="outline" 
+                              size="sm"
+                              onClick={() => {
+                                setEditingPayment(p);
+                                setEditAmount(p.amount.toString());
+                                setEditMethod(p.method);
+                                setEditReference(p.reference || '');
+                                setEditNotes(p.notes || '');
+                              }}
+                            >
+                              Edit
+                            </Button>
                           </td>
-                          <td className="px-6 py-4"><span className="text-xs font-medium text-gray-500">{p.paidAt ?? p.createdAt}</span></td>
                         </tr>
                       );
                     })}
@@ -567,6 +595,61 @@ export default function ClientDetailPage() {
               </div>
             )}
           </Card>
+        </div>
+      )}
+      
+      {/* Edit Payment Modal */}
+      {editingPayment && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-[var(--color-bg)] rounded-3xl w-full max-w-sm shadow-2xl overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-white/[0.05]">
+              <h2 className="text-lg font-bold text-[var(--color-text-main)]">Edit Payment</h2>
+              <button onClick={() => setEditingPayment(null)} className="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-900 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-[var(--color-text-main)] mb-1.5">Amount</label>
+                <input
+                  type="number"
+                  value={editAmount}
+                  onChange={(e) => setEditAmount(e.target.value)}
+                  className="w-full px-4 py-3 text-sm font-bold rounded-xl border-2 border-transparent bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] focus:bg-[var(--color-card)] transition-all"
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-[var(--color-text-main)] mb-1.5">Method</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {(['cash', 'upi', 'bank_transfer', 'card'] as PaymentMethod[]).map(m => (
+                    <button
+                      key={m}
+                      onClick={() => setEditMethod(m)}
+                      className={`py-2 px-3 rounded-lg text-xs font-bold capitalize transition-all border-2 ${editMethod === m ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/10 text-[var(--color-primary)]' : 'border-transparent bg-[var(--color-input-bg)] text-[var(--color-text-muted)] hover:bg-[var(--color-card)]'}`}
+                    >
+                      {m.replace('_', ' ')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-semibold text-[var(--color-text-main)] mb-1.5">Reference No</label>
+                <input
+                  type="text"
+                  value={editReference}
+                  onChange={(e) => setEditReference(e.target.value)}
+                  className="w-full px-4 py-2 text-sm font-bold rounded-xl border-2 border-transparent bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] focus:bg-[var(--color-card)] transition-all"
+                />
+              </div>
+
+              <Button size="lg" className="w-full h-12 text-base shadow-lg mt-4" onClick={handleSavePaymentEdit}>
+                Save Changes
+              </Button>
+            </div>
+          </div>
         </div>
       )}
     </div>

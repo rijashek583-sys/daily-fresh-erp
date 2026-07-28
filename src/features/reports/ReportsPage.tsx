@@ -7,6 +7,7 @@ import {
 import { monthlyRevenueData } from '../../types';
 import { useDataStore } from '../../stores/dataStore';
 import { isToday, isThisMonth } from 'date-fns';
+import { useDivisionStore } from '../../stores/divisionStore';
 import { PageHeader, Card, StatCard, Badge, Button } from '../../components/ui';
 import { formatCurrency } from '../../lib/utils';
 import { toast } from 'sonner';
@@ -24,39 +25,106 @@ const productSales = [
 
 export default function ReportsPage() {
   const { orders, clients, payments } = useDataStore();
+  const { activeDivision } = useDivisionStore();
   const [dateRange, setDateRange] = useState('This Month');
 
 
-  const { totalRevenue, computedTopClients, outstandingPayments, dailyCollection, monthlyCollection } = React.useMemo(() => {
-    const validOrders = orders;
-    const validPayments = payments;
-    const rev = validOrders.reduce((s, o) => s + o.total, 0);
-    
-    const totalCollected = validPayments.filter(p => p.status === 'completed').reduce((s, p) => s + p.amount, 0);
+  const { totalRevenue, computedTopClients, outstandingPayments, dailyCollection, monthlyCollection, monthlyRev, productSalesData, totalProductSales } = React.useMemo(() => {
+    const { ledger } = useDataStore.getState();
+    const validPayments = payments.filter(p => {
+      if (activeDivision === 'all') return true;
+      return p.division === activeDivision;
+    });
+
+    let rev = 0;
+    let totalCollected = 0;
+    const map = new Map<string, { name: string, orders: number, revenue: number, thisMonthRev: number, lastMonthRev: number, trend: number }>();
+
+    const thisMonth = new Date().getMonth();
+    const lastMonth = thisMonth === 0 ? 11 : thisMonth - 1;
+
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const monthlyRev = Array.from({length: 12}, (_, i) => {
+      const m = (thisMonth - 11 + i + 12) % 12;
+      return { month: monthNames[m], revenue: 0, monthIndex: m };
+    });
+
+    const prodSalesMap = new Map<string, number>();
+
+    ledger.forEach(l => {
+      if (activeDivision !== 'all') {
+        const d = l.division;
+        if (d && d !== 'all' && d !== activeDivision) return;
+      }
+      
+      if (l.type === 'invoice') {
+        const amt = l.amount || 0;
+        rev += amt;
+        
+        const lDate = new Date(l.billDate || l.createdAt);
+        const lMonth = lDate.getMonth();
+        
+        // Add to monthly chart if in last 12 months
+        const targetMonth = monthlyRev.find(m => m.monthIndex === lMonth);
+        if (targetMonth && lDate.getFullYear() >= new Date().getFullYear() - 1) {
+          targetMonth.revenue += amt;
+        }
+
+        // Product sales aggregation
+        if (l.invoiceId) {
+          const order = orders.find(o => o.id === l.invoiceId);
+          if (order) {
+            order.items.forEach(item => {
+              const p = prodSalesMap.get(item.productName) || 0;
+              prodSalesMap.set(item.productName, p + item.total);
+            });
+          }
+        }
+        
+        const client = clients.find(c => c.id === l.clientId);
+        if (client) {
+          const current = map.get(l.clientId) || { name: client.name, orders: 0, revenue: 0, thisMonthRev: 0, lastMonthRev: 0, trend: 0 };
+          current.orders += 1;
+          current.revenue += amt;
+          
+          if (lMonth === thisMonth) current.thisMonthRev += amt;
+          else if (lMonth === lastMonth) current.lastMonthRev += amt;
+          
+          current.trend = current.lastMonthRev > 0 
+            ? Math.round(((current.thisMonthRev - current.lastMonthRev) / current.lastMonthRev) * 100) 
+            : (current.thisMonthRev > 0 ? 100 : 0);
+            
+          map.set(l.clientId, current);
+        }
+      } else if (l.type === 'payment') {
+        totalCollected += (l.amount || 0);
+      }
+    });
+
     const outstanding = rev - totalCollected;
     
     const dailyColl = validPayments
-      .filter(p => p.status === 'completed' && isToday(new Date(p.createdAt)))
+      .filter(p => isToday(new Date(p.billDate || p.createdAt)))
       .reduce((s, p) => s + p.amount, 0);
       
     const monthlyColl = validPayments
-      .filter(p => p.status === 'completed' && isThisMonth(new Date(p.createdAt)))
+      .filter(p => isThisMonth(new Date(p.billDate || p.createdAt)))
       .reduce((s, p) => s + p.amount, 0);
 
-    const map = new Map<string, { name: string, orders: number, revenue: number, trend: number }>();
-    validOrders.forEach(o => {
-      const current = map.get(o.clientId) || { name: o.clientName, orders: 0, revenue: 0, trend: Math.floor(Math.random() * 20) - 5 };
-      current.orders += 1;
-      current.revenue += o.total;
-      map.set(o.clientId, current);
-    });
     const top = Array.from(map.values()).sort((a, b) => b.revenue - a.revenue).slice(0, 5);
     
+    const productSalesData = Array.from(prodSalesMap.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([name, value]) => ({ name, value }));
+    const totalProductSales = productSalesData.reduce((s, p) => s + p.value, 0);
+
     return { 
       totalRevenue: rev, computedTopClients: top,
-      outstandingPayments: outstanding, dailyCollection: dailyColl, monthlyCollection: monthlyColl
+      outstandingPayments: outstanding, dailyCollection: dailyColl, monthlyCollection: monthlyColl,
+      monthlyRev, productSalesData, totalProductSales
     };
-  }, [orders, clients, payments]);
+  }, [orders, clients, payments, activeDivision]);
 
   const CustomTooltip = ({ active, payload, label, prefix = '₹' }: any) => {
     if (!active || !payload?.length) return null;
@@ -80,29 +148,31 @@ export default function ReportsPage() {
 
   return (
     <div className="max-w-7xl mx-auto pb-10">
-      <PageHeader
-        title="Business Reports"
-        description="Comprehensive insights into revenue, clients, and product performance."
-        actions={
-          <>
-            <div className="flex items-center gap-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-full pl-4 pr-2 py-1 shadow-sm">
-              <Calendar className="w-4 h-4 text-gray-400" />
-              <select
-                value={dateRange}
-                onChange={e => setDateRange(e.target.value)}
-                className="bg-transparent text-sm font-semibold text-[var(--color-text-main)] outline-none cursor-pointer appearance-none pr-6"
-                style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239CA3AF'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`, backgroundPosition: 'right center', backgroundSize: '1rem' }}
-              >
-                <option>This Month</option>
-                <option>Last Month</option>
-                <option>Last 3 Months</option>
-                <option>This Year</option>
-              </select>
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
+        <PageHeader
+          title="Business Reports"
+          description="Comprehensive insights into revenue, clients, and product performance."
+          actions={
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-full pl-4 pr-2 py-1 shadow-sm">
+                <Calendar className="w-4 h-4 text-gray-400" />
+                <select
+                  value={dateRange}
+                  onChange={e => setDateRange(e.target.value)}
+                  className="bg-transparent text-sm font-semibold text-[var(--color-text-main)] outline-none cursor-pointer appearance-none pr-6"
+                  style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239CA3AF'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`, backgroundPosition: 'right center', backgroundSize: '1rem' }}
+                >
+                  <option>This Month</option>
+                  <option>Last Month</option>
+                  <option>Last 3 Months</option>
+                  <option>This Year</option>
+                </select>
+              </div>
+              <Button size="md" icon={<Download className="w-4 h-4" />} onClick={() => toast.success('Report downloaded')}>Export PDF</Button>
             </div>
-            <Button size="md" icon={<Download className="w-4 h-4" />} onClick={() => toast.success('Report downloaded')}>Export PDF</Button>
-          </>
-        }
-      />
+          }
+        />
+      </div>
 
       {/* KPI Summary */}
       <div className="grid grid-cols-4 gap-6 mb-8">
@@ -121,7 +191,7 @@ export default function ReportsPage() {
           </div>
           <div className="p-6 h-[320px]">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={monthlyRevenueData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <AreaChart data={monthlyRev} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <defs>
                   <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="var(--color-primary)" stopOpacity={0.2}/>
@@ -171,7 +241,7 @@ export default function ReportsPage() {
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
-                  data={productSales}
+                  data={productSalesData}
                   cx="50%"
                   cy="50%"
                   innerRadius={80}
@@ -180,7 +250,7 @@ export default function ReportsPage() {
                   dataKey="value"
                   stroke="none"
                 >
-                  {productSales.map((_, index) => (
+                  {productSalesData.map((_, index) => (
                     <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
                   ))}
                 </Pie>
@@ -191,7 +261,7 @@ export default function ReportsPage() {
             {/* Center Text */}
             <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none pb-6">
               <span className="text-[10px] font-medium text-gray-400 uppercase tracking-widest mb-1">Total</span>
-              <span className="text-xl font-semibold text-[var(--color-text-main)]">{formatCurrency(115000)}</span>
+              <span className="text-xl font-semibold text-[var(--color-text-main)]">{formatCurrency(totalProductSales)}</span>
             </div>
           </div>
         </Card>

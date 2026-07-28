@@ -1,4 +1,11 @@
 export type Region = string;
+export type Division = 'primary' | 'bakery';
+export type FilterDivision = Division | 'all';
+
+export const DIVISION_LABELS: Record<Division, string> = {
+  primary: 'Primary Foods',
+  bakery: 'Bakery Foods'
+};
 
 export interface User {
   uid: string;
@@ -8,6 +15,13 @@ export interface User {
   role: 'admin' | 'staff' | 'delivery_staff';
   status: 'active' | 'inactive';
   createdAt: string;
+}
+
+export interface ClientTotals {
+  totalOrders: number;
+  totalRevenue: number;
+  totalPaid: number;
+  outstanding: number;
 }
 
 export interface Client {
@@ -24,6 +38,8 @@ export interface Client {
   totalRevenue: number;
   totalPaid?: number;
   outstanding: number;
+  primaryTotals?: ClientTotals;
+  bakeryTotals?: ClientTotals;
   joinedAt?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -38,6 +54,7 @@ export interface Product {
   unit?: string;
   status: 'active' | 'inactive';
   displayOrder: number;
+  division?: Division;
   createdAt?: string;
   updatedAt?: string;
   deletedAt?: string;
@@ -56,15 +73,14 @@ export interface Order {
   id: string;
   clientId: string;
   clientName: string;
+  deliveryDate: string;
   items: OrderItem[];
   subtotal: number;
+  tax: number;
   total: number;
-  deliveryDate: string;
-  status: 'pending' | 'completed' | 'cancelled';
-  paymentStatus: 'unpaid' | 'partial' | 'paid';
-  paidAmount: number;
+  division?: FilterDivision; // 'all' is valid for cross-division orders
   createdAt: string;
-  createdBy: string;
+  updatedBy?: string;
   updatedAt: string;
   notes?: string;
 }
@@ -77,25 +93,27 @@ export interface TrashDocument {
   deletedBy: string;
 }
 
-export type PaymentStatus = 'completed' | 'pending' | 'failed';
 export type PaymentMethod = 'upi' | 'cash' | 'bank_transfer' | 'card';
 
 export interface Payment {
   id: string;
-  orderId?: string;
+  /** Links this payment to the specific order/invoice it was recorded against. */
+  invoiceId?: string;
   clientId: string;
   clientName: string;
   amount: number;
   method: PaymentMethod;
-  status: PaymentStatus;
   reference?: string;
+  notes?: string;
   paidAt?: string;
+  division: Division; // required — payments must be specifically primary or bakery
   createdAt: string;
   updatedBy?: string;
   billDate?: string;
   deletedAt?: string;
   deletedBy?: string;
 }
+
 
 export interface LedgerTransaction {
   id: string;
@@ -107,8 +125,11 @@ export interface LedgerTransaction {
   paymentDate?: string;
   paymentMethod?: string;
   description?: string;
+  division: Division; // required — ledger entries are always division-specific
   createdAt: string;
+  billDate?: string;
 }
 
 export const monthlyRevenueData: any[] = [];
 export const deletedRegions: any[] = [];
+

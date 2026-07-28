@@ -77,7 +77,7 @@ export const useDataStore = create<DataState>((set) => ({
       (data) => {
         const pricingMap: Record<string, Record<string, number>> = {};
         data.forEach((doc: any) => {
-          pricingMap[doc.id] = doc.pricing || {};
+          pricingMap[doc.id] = { ...(doc.all || {}), ...(doc.primary || {}), ...(doc.bakery || {}) };
         });
         set({ clientPricing: pricingMap });
       },

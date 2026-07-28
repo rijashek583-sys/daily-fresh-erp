@@ -1,10 +1,11 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Save, ArrowLeft, Plus, Search, X, MapPin } from 'lucide-react';
-import { Button, Card, PageHeader } from '../../components/ui';
+import { Button, Card, Input, Select, PageHeader } from '../../components/ui';
 import { useDataStore } from '../../stores/dataStore';
 import { toast } from 'sonner';
 import { addClient, saveClientPricing, saveRegions } from '../../services/db';
+import { getProductDivision } from '../../lib/utils';
 
 // ─── Add Region Modal ──────────────────────────────────────────────────────────
 function AddRegionModal({
@@ -217,13 +218,25 @@ export default function AddClientPage() {
       const newId = await addClient(newClient);
 
       // Save custom pricing
-      const newPricing: Record<string, number> = {};
+      const primaryPricing: Record<string, number> = {};
+      const bakeryPricing: Record<string, number> = {};
+      
       Object.entries(pricing).forEach(([pid, val]) => {
         const num = Number(val);
-        if (!isNaN(num) && num > 0) newPricing[pid] = num;
+        if (!isNaN(num) && num > 0) {
+          const product = products.find(p => p.id === pid);
+          if (product) {
+            if (getProductDivision(product) === 'bakery') bakeryPricing[pid] = num;
+            else primaryPricing[pid] = num;
+          }
+        }
       });
-      if (Object.keys(newPricing).length > 0) {
-        await saveClientPricing(newId, newPricing);
+      
+      if (Object.keys(primaryPricing).length > 0) {
+        await saveClientPricing(newId, 'primary', primaryPricing);
+      }
+      if (Object.keys(bakeryPricing).length > 0) {
+        await saveClientPricing(newId, 'bakery', bakeryPricing);
       }
 
       toast.success('Client added!', { description: `${newClient.name} has been saved under ${region}.` });

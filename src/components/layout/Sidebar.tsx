@@ -9,9 +9,9 @@ import { useAuthStore } from '../../stores/authStore';
 interface NavItem { label: string; href: string; icon: React.ElementType; adminOnly?: boolean; }
 
 const navItems: NavItem[] = [
-  { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, adminOnly: true },
+  { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { label: 'Orders', href: '/orders', icon: ShoppingCart, adminOnly: true },
-  { label: 'Clients', href: '/clients', icon: Users }, // Visible to Staff
+  { label: 'Clients', href: '/clients', icon: Users, adminOnly: true },
   { label: 'Products', href: '/products', icon: Package, adminOnly: true },
   { label: 'Daily Bill', href: '/billing', icon: Receipt },
   { label: 'Client Ledger', href: '/ledger', icon: BookOpen, adminOnly: true },
@@ -28,7 +28,7 @@ export default function Sidebar() {
   return (
     <aside className="fixed left-0 top-0 w-[280px] h-screen bg-[var(--color-bg)] border-r border-black/[0.04] dark:border-white/[0.04] flex flex-col z-30 transition-colors duration-300">
       {/* Header / Logo */}
-      <div className="flex items-center gap-4 h-20 px-8 shrink-0">
+      <div className="flex items-center gap-4 h-20 px-8 shrink-0 border-b border-black/[0.04] dark:border-white/[0.04]">
         <div className="w-10 h-10 rounded-full bg-white dark:bg-gray-800 shadow-[var(--shadow-soft)] border border-black/[0.04] dark:border-white/[0.04] flex items-center justify-center overflow-hidden">
           <img src="/logo.png" alt="Daily Fresh" className="w-full h-full object-cover" onError={(e) => { e.currentTarget.src = 'https://ui-avatars.com/api/?name=DF&color=B91C1C&background=FAFAFA'; }} />
         </div>

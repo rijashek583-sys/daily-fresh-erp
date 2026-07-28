@@ -1,8 +1,13 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Save, Search, MapPin } from 'lucide-react';
 import { useDataStore } from '../../stores/dataStore';
-import { Button, Card, PageHeader, StatusSelect } from '../../components/ui';
+import { Button, Card, PageHeader, StatusSelect, Badge } from '../../components/ui';
 import { toast } from 'sonner';
+import { saveClientPricing } from '../../services/db';
+import { DIVISION_LABELS } from '../../types';
+import { useDivisionStore } from '../../stores/divisionStore';
+import { getProductDivision } from '../../lib/utils';
+import { resolveProductPrice } from '../../lib/pricing';
 
 const REGIONS = [
   'Commission',
@@ -14,6 +19,7 @@ const REGIONS = [
 
 export default function ClientPricingPage() {
   const { clients, products, clientPricing } = useDataStore();
+  const { activeDivision: activeTab } = useDivisionStore();
   const activeClients = clients.filter(c => c.status === 'active');
   
   const [selectedRegion, setSelectedRegion] = useState(() => localStorage.getItem('pricing_selectedRegion') || '');
@@ -30,15 +36,15 @@ export default function ClientPricingPage() {
     return regionClients.find(c => c.id === selectedClient) || null;
   }, [regionClients, selectedClient]);
 
-  // Load pricing when client changes
+  // Load initial values from global store
   useEffect(() => {
     if (client) {
-      const base = clientPricing[client.id] ?? {};
-      setPricing(Object.fromEntries(Object.entries(base).map(([k, v]) => [k, String(v)])));
+      const allPrices = clientPricing[client.id] || {};
+      setPricing(Object.fromEntries(Object.entries(allPrices).map(([k, v]) => [k, String(v)])));
     } else {
       setPricing({});
     }
-  }, [client]);
+  }, [client, clientPricing]);
 
   const handleRegionChange = (region: string) => {
     setSelectedRegion(region);
@@ -67,27 +73,63 @@ export default function ClientPricingPage() {
     setSearchTerm('');
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!client) return;
     
-    const newPricing: Record<string, number> = {};
-    Object.entries(pricing).forEach(([pid, val]) => {
-      const num = Number(val);
-      if (!isNaN(num) && num > 0) {
-        newPricing[pid] = num;
+    if (activeTab === 'all') {
+      const primaryPricing: Record<string, number> = {};
+      const bakeryPricing: Record<string, number> = {};
+      
+      Object.entries(pricing).forEach(([pid, val]) => {
+        const num = Number(val);
+        if (!isNaN(num) && num > 0) {
+          const product = products.find(p => p.id === pid);
+          if (product) {
+            if (getProductDivision(product) === 'bakery') bakeryPricing[pid] = num;
+            else primaryPricing[pid] = num;
+          }
+        }
+      });
+      
+      try {
+        await saveClientPricing(client.id, 'primary', primaryPricing);
+        await saveClientPricing(client.id, 'bakery', bakeryPricing);
+        toast.success('Pricing saved!', { description: `Custom prices updated for ${client.name} (All Divisions)` });
+      } catch (error) {
+        // Error handled in db.ts
       }
-    });
-    
-    // Maintain database consistency by updating the mock store
-    clientPricing[client.id] = newPricing;
-    
-    toast.success('Pricing saved!', { description: `Custom prices updated for ${client.name}` });
+    } else {
+      const newPricing: Record<string, number> = {};
+      Object.entries(pricing).forEach(([pid, val]) => {
+        const num = Number(val);
+        if (!isNaN(num) && num > 0) {
+          const product = products.find(p => p.id === pid);
+          if (product && getProductDivision(product) === activeTab) {
+            newPricing[pid] = num;
+          }
+        }
+      });
+      
+      try {
+        await saveClientPricing(client.id, activeTab, newPricing);
+        toast.success('Pricing saved!', { description: `Custom prices updated for ${client.name} (${DIVISION_LABELS[activeTab]})` });
+      } catch (error) {
+        // Error handled in db.ts
+      }
+    }
   };
 
   const filteredProducts = useMemo(() => {
     if (!client) return [];
-    return products.filter(p => p.status === 'active' && p.name.toLowerCase().includes(searchTerm.toLowerCase()));
-  }, [client, searchTerm]);
+    let result = products.filter(p => p.status === 'active' && !p.deletedAt);
+    if (activeTab !== 'all') {
+      result = result.filter(p => getProductDivision(p) === activeTab);
+    }
+    if (searchTerm) {
+      result = result.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()));
+    }
+    return result.sort((a, b) => (a.displayOrder || 99) - (b.displayOrder || 99));
+  }, [client, searchTerm, activeTab, products]);
 
   return (
     <div className="max-w-4xl mx-auto pb-12">
@@ -177,7 +219,9 @@ export default function ClientPricingPage() {
         <Card padding={false} className="overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-300">
           <div className="px-6 py-5 border-b border-gray-100 dark:border-white/[0.05] bg-gray-50/50 dark:bg-black/10 flex flex-col sm:flex-row gap-4 items-center justify-between">
             <div>
-              <h2 className="text-base font-semibold text-[var(--color-text-main)]">Product Pricing</h2>
+              <div className="flex items-center gap-4">
+                <h2 className="text-base font-semibold text-[var(--color-text-main)]">Product Pricing</h2>
+              </div>
               <p className="text-xs font-medium text-[var(--color-text-muted)] mt-1">Set the specific price for this client.</p>
             </div>
             <div className="relative w-full sm:w-64">
@@ -216,7 +260,7 @@ export default function ClientPricingPage() {
                           <span className="text-sm font-medium text-gray-400">₹</span>
                           <input
                             type="number"
-                            placeholder="0"
+                            placeholder={client ? String(resolveProductPrice(client.id, p.id)) : "0"}
                             value={pricing[p.id] ?? ''}
                             onChange={e => setPricing(prev => ({ ...prev, [p.id]: e.target.value }))}
                             min={0}

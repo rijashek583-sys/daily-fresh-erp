@@ -62,3 +62,15 @@ export function slugify(text: string): string {
     .replace(/\s+/g, '-')
     .replace(/[^\w-]+/g, '');
 }
+
+export function getProductDivision(product: { name: string, division?: string } | undefined | null): 'primary' | 'bakery' {
+  if (!product) return 'bakery';
+  if (product.division === 'primary' || product.division === 'bakery') {
+    return product.division;
+  }
+  const name = product.name.trim().toLowerCase();
+  if (name === 'kuboos' || name === 'roomali' || name === 'soft kuboos') {
+    return 'primary';
+  }
+  return 'bakery';
+}

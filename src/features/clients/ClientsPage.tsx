@@ -7,6 +7,9 @@ import { Button, Badge, Card, DataTable, SearchInput, PageHeader, StatusSelect, 
 import { toast } from 'sonner';
 import { useAuthStore } from '../../stores/authStore';
 import { updateClient, moveToTrash, saveRegions } from '../../services/db';
+import { useDivisionStore } from '../../stores/divisionStore';
+import { getClientMetrics } from '../../lib/billing';
+import { formatCurrency } from '../../lib/utils';
 
 function RowActions({ client, onEdit, onDelete, onView }: { client: Client, onEdit: () => void, onDelete: () => void, onView: () => void }) {
   const [open, setOpen] = useState(false);
@@ -53,6 +56,7 @@ export default function ClientsPage() {
   const { user } = useAuthStore();
   const isAdmin = user?.role === 'admin';
   const navigate = useNavigate();
+  const { activeDivision } = useDivisionStore();
   
   const [selectedRegion, setSelectedRegion] = useState<Region | null>(null);
   const [search, setSearch] = useState('');
@@ -105,6 +109,13 @@ export default function ClientsPage() {
       ),
     },
     { key: 'totalOrders', label: 'Total Orders', render: r => <Badge variant="gray">{orders.filter(o => o.clientId === r.id).length} Orders</Badge> },
+    { 
+      key: 'outstanding', label: 'Outstanding', 
+      render: r => {
+        const metrics = getClientMetrics(r.id, activeDivision);
+        return <span className={`text-sm font-bold ${metrics.outstanding > 0 ? 'text-amber-600' : 'text-green-600'}`}>{formatCurrency(Math.abs(metrics.outstanding))}</span>;
+      }
+    },
     { key: 'city', label: 'Location', render: r => <span className="text-sm font-medium text-[var(--color-text-muted)]">{r.city || r.region || '—'}</span> },
     {
       key: 'status', label: 'Status', align: 'center',

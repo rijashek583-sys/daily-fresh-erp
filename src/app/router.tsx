@@ -14,7 +14,7 @@ function RootRedirect() {
   }
   if (!user) return <Navigate to="/login" replace />;
   if (user.role === 'admin') return <Navigate to="/dashboard" replace />;
-  return <Navigate to="/clients" replace />;
+  return <Navigate to="/dashboard" replace />;
 }
 
 // Lazy-loaded pages for code splitting
@@ -57,8 +57,8 @@ const router = createBrowserRouter([
       element: <AppShell />,
       children: [
         { path: '/', element: <RootRedirect /> },
-        { path: '/dashboard', element: <RequireAdmin><SuspenseWrapper><DashboardPage /></SuspenseWrapper></RequireAdmin> },
-        { path: '/clients', element: <SuspenseWrapper><ClientsPage /></SuspenseWrapper> },
+        { path: '/dashboard', element: <SuspenseWrapper><DashboardPage /></SuspenseWrapper> },
+        { path: '/clients', element: <RequireAdmin><SuspenseWrapper><ClientsPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/clients/new', element: <RequireAdmin><SuspenseWrapper><AddClientPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/clients/:clientId/edit', element: <RequireAdmin><SuspenseWrapper><EditClientPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/clients/:clientId', element: <RequireAdmin><SuspenseWrapper><ClientDetailPage /></SuspenseWrapper></RequireAdmin> },
@@ -71,7 +71,7 @@ const router = createBrowserRouter([
         { path: '/orders/new', element: <RequireAdmin><SuspenseWrapper><CreateOrderPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/orders/:orderId/edit', element: <RequireAdmin><SuspenseWrapper><CreateOrderPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/billing', element: <SuspenseWrapper><DailyBillingPage /></SuspenseWrapper> },
-        { path: '/ledger', element: <RequireAdmin><SuspenseWrapper><ClientLedgerPage /></SuspenseWrapper></RequireAdmin> },
+        { path: '/ledger', element: <SuspenseWrapper><ClientLedgerPage /></SuspenseWrapper> },
         { path: '/reports', element: <RequireAdmin><SuspenseWrapper><ReportsPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/settings', element: <RequireAdmin><SuspenseWrapper><SettingsPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/trash', element: <RequireAdmin><SuspenseWrapper><TrashPage /></SuspenseWrapper></RequireAdmin> },

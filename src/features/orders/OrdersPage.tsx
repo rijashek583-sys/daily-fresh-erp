@@ -5,12 +5,14 @@ import { format } from 'date-fns';
 import { type Order, type Region } from '../../types';
 import { useDataStore } from '../../stores/dataStore';
 import { Button, Card, DataTable, PageHeader, type Column, Badge, SearchInput } from '../../components/ui';
+import { useDivisionStore } from '../../stores/divisionStore';
 import { toast } from 'sonner';
 import { moveToTrash } from '../../services/db';
 import { useAuthStore } from '../../stores/authStore';
-import { formatCurrency, cn } from '../../lib/utils';
+import { formatCurrency, cn, getProductDivision } from '../../lib/utils';
+import { resolveProductPrice } from '../../lib/pricing';
 export default function OrdersPage() {
-  const { clients, orders, regions } = useDataStore();
+  const { clients, orders, regions, products } = useDataStore();
   const navigate = useNavigate();
   const { user } = useAuthStore();
   
@@ -20,7 +22,7 @@ export default function OrdersPage() {
   const [filterClientId, setFilterClientId] = useState<string>('');
   const [search, setSearch] = useState('');
   const [confirmDeleteOrderId, setConfirmDeleteOrderId] = useState<string | null>(null);
-
+  const { activeDivision: activeTab } = useDivisionStore();
   const activeRegions = useMemo(() => regions, [regions]);
   const activeClients = useMemo(() => clients.filter(c => !c.deletedAt && (filterRegion ? c.region === filterRegion : true)), [filterRegion, clients]);
 
@@ -67,37 +69,8 @@ export default function OrdersPage() {
       key: 'total', label: 'Total', align: 'right',
       render: r => <span className="text-sm font-bold text-[var(--color-text-main)]">{formatCurrency(r.total)}</span>,
     },
-    {
-      key: 'status', label: 'Status', align: 'center',
-      render: r => {
-        return (
-          <span className={cn(
-            "px-3 py-1 rounded-full text-xs font-bold uppercase tracking-widest",
-            r.status === 'completed' ? "bg-[var(--color-success-bg)] text-[var(--color-success)]" :
-            r.status === 'pending' ? "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400" :
-            "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400"
-          )}>
-            {r.status || 'Pending'}
-          </span>
-        );
-      }
-    },
-    {
-      key: 'paymentStatus', label: 'Payment Status', align: 'center',
-      render: r => {
-        const paymentStatus = r.paymentStatus || 'unpaid';
-        return (
-          <span className={cn(
-            "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest inline-block",
-            paymentStatus === 'paid' ? "bg-[var(--color-success-bg)] text-[var(--color-success)]" :
-            paymentStatus === 'partial' ? "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400" :
-            "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400"
-          )}>
-            {paymentStatus === 'paid' ? 'Paid' : paymentStatus === 'partial' ? 'Partial' : 'Unpaid'}
-          </span>
-        );
-      }
-    },
+
+
     {
       key: 'actions', label: '', align: 'right',
       render: r => (
@@ -125,7 +98,34 @@ export default function OrdersPage() {
 
   // Filter orders
   const displayOrders = useMemo(() => {
-    return orders.filter(o => {
+    return orders.map(o => {
+      let itemsToProcess = o.items;
+      if (activeTab !== 'all') {
+        itemsToProcess = itemsToProcess.filter(item => {
+          const product = products.find(p => p.id === item.productId);
+          const div = getProductDivision(product);
+          return div === activeTab;
+        });
+      }
+      
+      const dynamicallyPricedItems = itemsToProcess.map(item => {
+        const product = products.find(p => p.id === item.productId);
+        const unitPrice = product ? resolveProductPrice(o.clientId, product.id) : item.unitPrice;
+        return {
+          ...item,
+          unitPrice,
+          total: unitPrice * item.qty
+        };
+      });
+
+      return {
+        ...o,
+        items: dynamicallyPricedItems,
+        total: dynamicallyPricedItems.reduce((sum, item) => sum + item.total, 0),
+        subtotal: dynamicallyPricedItems.reduce((sum, item) => sum + item.total, 0)
+      };
+    }).filter(o => {
+      if (o.items.length === 0 && activeTab !== 'all') return false;
       // Check if order exists (deleted orders are physically moved to trash)
       let matches = true;
       if (filterDate) {
@@ -143,7 +143,7 @@ export default function OrdersPage() {
       }
       return matches;
     }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [orders, filterDate, filterRegion, filterClientId, search]);
+  }, [orders, products, filterDate, filterRegion, filterClientId, search, activeTab]);
 
   return (
     <div className="max-w-7xl mx-auto pb-12">

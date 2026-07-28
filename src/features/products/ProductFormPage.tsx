@@ -17,7 +17,8 @@ export default function ProductFormPage() {
   const [formData, setFormData] = useState({
     name: '',
     status: 'active' as 'active' | 'inactive',
-    displayOrder: ''
+    displayOrder: '',
+    division: '' as import('../../types').Division | ''
   });
 
   useEffect(() => {
@@ -25,7 +26,8 @@ export default function ProductFormPage() {
       setFormData({
         name: existingProduct.name || '',
         status: existingProduct.status || 'active',
-        displayOrder: existingProduct.displayOrder?.toString() || ''
+        displayOrder: existingProduct.displayOrder?.toString() || '',
+        division: existingProduct.division || ''
       });
     }
   }, [existingProduct]);
@@ -40,11 +42,16 @@ export default function ProductFormPage() {
       toast.error('Valid display order is required.');
       return;
     }
+    if (!formData.division) {
+      toast.error('Division is required.');
+      return;
+    }
 
     const payload = {
       name: formData.name,
       status: formData.status,
-      displayOrder: parseInt(formData.displayOrder, 10)
+      displayOrder: parseInt(formData.displayOrder, 10),
+      division: formData.division
     };
 
     try {
@@ -127,6 +134,19 @@ export default function ProductFormPage() {
                 >
                   <option value="active">Active</option>
                   <option value="inactive">Inactive</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-[var(--color-text-main)] mb-2">Division <span className="text-red-500">*</span></label>
+                <select
+                  required
+                  value={formData.division}
+                  onChange={e => setFormData({ ...formData, division: e.target.value as import('../../types').Division })}
+                  className="w-full px-4 py-3 rounded-xl border-2 border-transparent bg-[var(--color-input-bg)] text-sm font-medium text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] focus:bg-[var(--color-card)] transition-colors appearance-none"
+                >
+                  <option value="" disabled>Select Division</option>
+                  <option value="primary">Primary Foods</option>
+                  <option value="bakery">Bakery Foods</option>
                 </select>
               </div>
             </div>

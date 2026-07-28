@@ -4,8 +4,9 @@ import { Button, Card, Input, Select, PageHeader, Avatar } from '../../component
 import { useAuthStore } from '../../stores/authStore';
 import { useUIStore } from '../../stores/uiStore';
 import { toast } from 'sonner';
+import { useDataStore } from '../../stores/dataStore';
 
-type SettingsTab = 'profile' | 'company' | 'notifications' | 'appearance' | 'security';
+type SettingsTab = 'profile' | 'company' | 'notifications' | 'appearance' | 'security' | 'advanced';
 
 export default function SettingsPage() {
   const { user } = useAuthStore();
@@ -19,6 +20,7 @@ export default function SettingsPage() {
     { id: 'notifications', label: 'Notifications', icon: Bell },
     { id: 'appearance', label: 'Appearance', icon: Moon },
     { id: 'security', label: 'Security', icon: Shield },
+    { id: 'advanced', label: 'Advanced', icon: Shield },
   ];
 
   const handleSave = async (e: React.FormEvent) => {
@@ -27,6 +29,29 @@ export default function SettingsPage() {
     await new Promise(r => setTimeout(r, 800));
     setLoading(false);
     toast.success('Settings saved', { description: 'Your preferences have been updated.' });
+  };
+
+  const [migrating, setMigrating] = useState(false);
+  const handleMigrateProducts = async () => {
+    if (!confirm('Are you sure you want to assign the Primary division to all products that currently lack a division?')) return;
+    
+    setMigrating(true);
+    try {
+      const { products } = useDataStore.getState();
+      const productsToUpdate = products.filter(p => !p.division);
+      
+      const { updateProduct } = await import('../../services/db');
+      for (const product of productsToUpdate) {
+        await updateProduct(product.id, { division: 'primary' });
+      }
+      
+      toast.success('Migration Complete', { description: `Updated ${productsToUpdate.length} products.` });
+    } catch (error) {
+      console.error(error);
+      toast.error('Migration failed');
+    } finally {
+      setMigrating(false);
+    }
   };
 
   return (
@@ -158,6 +183,25 @@ export default function SettingsPage() {
                   <Shield className="w-12 h-12 text-gray-300 dark:text-gray-700 mx-auto mb-4" />
                   <h3 className="text-lg font-semibold text-[var(--color-text-main)] mb-1">Coming Soon</h3>
                   <p className="text-sm font-medium text-[var(--color-text-muted)]">These settings are not yet available in the demo.</p>
+                </div>
+              )}
+
+              {activeTab === 'advanced' && (
+                <div className="space-y-8 animate-in fade-in duration-300">
+                  <div>
+                    <h3 className="text-lg font-semibold text-[var(--color-text-main)] mb-1">Advanced Operations</h3>
+                    <p className="text-sm font-medium text-[var(--color-text-muted)]">Perform administrative maintenance tasks.</p>
+                  </div>
+                  
+                  <div className="p-6 border border-gray-200 dark:border-gray-800 rounded-2xl bg-gray-50 dark:bg-gray-800/20">
+                    <h4 className="text-base font-semibold text-[var(--color-text-main)] mb-2">Data Migration: Products Division</h4>
+                    <p className="text-sm text-[var(--color-text-muted)] mb-4">
+                      This one-time action assigns the "Primary" division to all existing products that currently do not have a division set. Use this to migrate old data to the new multi-division structure.
+                    </p>
+                    <Button type="button" onClick={handleMigrateProducts} loading={migrating} variant="primary">
+                      Run Migration
+                    </Button>
+                  </div>
                 </div>
               )}
 

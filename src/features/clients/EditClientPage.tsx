@@ -5,6 +5,7 @@ import { Button, Card, PageHeader } from '../../components/ui';
 import { useDataStore } from '../../stores/dataStore';
 import { toast } from 'sonner';
 import { updateClient, saveClientPricing, saveRegions } from '../../services/db';
+import { getProductDivision } from '../../lib/utils';
 
 // ─── Add Region Modal ──────────────────────────────────────────────────────────
 function AddRegionModal({
@@ -237,14 +238,22 @@ export default function EditClientPage() {
       await updateClient(clientId, updates);
 
       // Save custom pricing
-      const newPricing: Record<string, number> = {};
+      const primaryPricing: Record<string, number> = {};
+      const bakeryPricing: Record<string, number> = {};
+      
       Object.entries(pricing).forEach(([pid, val]) => {
         const num = Number(val);
-        if (!isNaN(num) && num > 0) newPricing[pid] = num;
+        if (!isNaN(num) && num > 0) {
+          const product = products.find(p => p.id === pid);
+          if (product) {
+            if (getProductDivision(product) === 'bakery') bakeryPricing[pid] = num;
+            else primaryPricing[pid] = num;
+          }
+        }
       });
       
-      // even if empty we should save it to clear it
-      await saveClientPricing(clientId, newPricing);
+      await saveClientPricing(clientId, 'primary', primaryPricing);
+      await saveClientPricing(clientId, 'bakery', bakeryPricing);
 
       toast.success('Client updated!', { description: `${updates.name} has been updated.` });
       navigate('/clients');

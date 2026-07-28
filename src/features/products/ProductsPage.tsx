@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import { useDataStore } from '../../stores/dataStore';
 import { Button, Card, SearchInput, PageHeader, EmptyState } from '../../components/ui';
+import { useDivisionStore } from '../../stores/divisionStore';
+import { getProductDivision } from '../../lib/utils';
 import { toast } from 'sonner';
 import { moveToTrash } from '../../services/db';
 import { useAuthStore } from '../../stores/authStore';
@@ -14,9 +16,11 @@ export default function ProductsPage() {
 
   const { user } = useAuthStore();
   const [search, setSearch] = useState('');
+  const { activeDivision: activeTab } = useDivisionStore();
   
   const filtered = products
     .filter(p => !p.deletedAt && p.name.toLowerCase().includes(search.toLowerCase()))
+    .filter(p => activeTab === 'all' || getProductDivision(p) === activeTab)
     .sort((a, b) => (a.displayOrder || 99) - (b.displayOrder || 99));
 
   const handleDelete = async (e: React.MouseEvent, productId: string) => {
@@ -43,7 +47,7 @@ export default function ProductsPage() {
 
       <Card padding={false} className="overflow-hidden">
         {/* Toolbar */}
-        <div className="flex px-8 py-5 border-b border-gray-100 dark:border-white/[0.05] bg-gray-50/50 dark:bg-black/10">
+        <div className="flex flex-col sm:flex-row px-8 py-5 border-b border-gray-100 dark:border-white/[0.05] bg-gray-50/50 dark:bg-black/10 gap-4 justify-end items-start sm:items-center">
           <SearchInput className="w-full max-w-md" value={search} onChange={e => setSearch(e.target.value)} onClear={() => setSearch('')} placeholder="Search products…" />
         </div>
 
