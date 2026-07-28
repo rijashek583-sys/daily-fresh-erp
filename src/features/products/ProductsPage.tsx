@@ -23,37 +23,7 @@ export default function ProductsPage() {
 
   const { user } = useAuthStore();
   const [search, setSearch] = useState('');
-  const { activeDivision: activeTab, setDivision } = useDivisionStore();
-
-  /** Build the dynamic option list from all non-deleted products' divisions */
-  const categoryOptions = useMemo<{ id: FilterDivision; label: string }[]>(() => {
-    const divSet = new Set<string>();
-    products
-      .filter(p => !p.deletedAt)
-      .forEach(p => divSet.add(getProductDivision(p)));
-
-    const options: { id: FilterDivision; label: string }[] = [
-      { id: 'all', label: 'All' },
-    ];
-
-    // Stable order: primary, bakery, then any future divisions alphabetically
-    const ordered = [
-      'primary',
-      'bakery',
-      ...Array.from(divSet).filter(d => d !== 'primary' && d !== 'bakery').sort(),
-    ];
-
-    ordered
-      .filter(d => divSet.has(d))
-      .forEach(d => {
-        options.push({
-          id: d as FilterDivision,
-          label: DIVISION_LABELS[d] ?? d.charAt(0).toUpperCase() + d.slice(1),
-        });
-      });
-
-    return options;
-  }, [products]);
+  const { activeDivision: activeTab } = useDivisionStore();
 
   const filtered = products
     .filter(p => !p.deletedAt && p.name.toLowerCase().includes(search.toLowerCase()))
@@ -85,44 +55,6 @@ export default function ProductsPage() {
       <Card padding={false} className="overflow-hidden">
         {/* Toolbar */}
         <div className="flex flex-col px-4 sm:px-8 py-4 sm:py-5 border-b border-gray-100 dark:border-white/[0.05] bg-gray-50/50 dark:bg-black/10 gap-3">
-
-          {/* ── Mobile-only category dropdown (hidden on md+) ── */}
-          <div className="md:hidden">
-            <label
-              htmlFor="product-category-select"
-              className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-1.5"
-            >
-              Category
-            </label>
-            <div className="relative">
-              <select
-                id="product-category-select"
-                value={activeTab}
-                onChange={e => setDivision(e.target.value as FilterDivision)}
-                className="
-                  w-full appearance-none pl-4 pr-10 py-3
-                  bg-white dark:bg-gray-900
-                  border border-gray-200 dark:border-gray-700
-                  rounded-2xl
-                  text-sm font-semibold text-[var(--color-text-main)]
-                  outline-none
-                  focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20
-                  transition-all duration-200
-                  cursor-pointer
-                  shadow-sm
-                "
-              >
-                {categoryOptions.map(opt => (
-                  <option key={opt.id} value={opt.id}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-              {/* Custom caret */}
-              <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-            </div>
-          </div>
-
           {/* Search — always visible */}
           <SearchInput
             className="w-full"

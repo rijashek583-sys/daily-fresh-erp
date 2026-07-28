@@ -30,7 +30,7 @@ export default function Header() {
 
       {/* Right actions */}
       <div className="flex items-center gap-2 sm:gap-3">
-        <DivisionTabs activeTab={activeDivision} onChange={setDivision} className="hidden md:flex shadow-sm mr-1" />
+        <DivisionTabs activeTab={activeDivision} onChange={setDivision} className="shadow-sm mr-1" />
         <ThemeToggle />
         <NotificationBell />
         <div className="w-px h-6 bg-gray-200 dark:bg-gray-800 mx-1 hidden sm:block" />
