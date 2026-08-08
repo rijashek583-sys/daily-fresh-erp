@@ -32,6 +32,14 @@ const ClientLedgerPage = lazy(() => import('../features/ledger/ClientLedgerPage'
 const ReportsPage = lazy(() => import('../features/reports/ReportsPage'));
 const SettingsPage = lazy(() => import('../features/settings/SettingsPage'));
 const TrashPage = lazy(() => import('../features/settings/TrashPage'));
+const StockIndexPage      = lazy(() => import('../features/stock/StockIndexPage'));
+const RawMaterialsPage    = lazy(() => import('../features/stock/RawMaterialsPage'));
+const RawMaterialStockPage = lazy(() => import('../features/stock/RawMaterialStockPage'));
+const ProductMaterialsPage = lazy(() => import('../features/stock/ProductMaterialsPage'));
+const ProductionPage      = lazy(() => import('../features/stock/ProductionPage'));
+const AddProductionPage   = lazy(() => import('../features/stock/AddProductionPage'));
+const FinishedStockPage   = lazy(() => import('../features/stock/FinishedStockPage'));
+const StockReportsPage    = lazy(() => import('../features/stock/StockReportsPage'));
 
 function PageLoader() {
   return (
@@ -75,7 +83,17 @@ const router = createBrowserRouter([
         { path: '/reports', element: <RequireAdmin><SuspenseWrapper><ReportsPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/settings', element: <RequireAdmin><SuspenseWrapper><SettingsPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/trash', element: <RequireAdmin><SuspenseWrapper><TrashPage /></SuspenseWrapper></RequireAdmin> },
-        { path: '/production', element: <Navigate to="/dashboard" replace /> },
+        { path: '/production', element: <Navigate to="/stock/production" replace /> },
+        // ── Stock & Production routes (admin only) ──────────────────────────────
+        { path: '/stock', element: <RequireAdmin><SuspenseWrapper><StockIndexPage /></SuspenseWrapper></RequireAdmin> },
+        { path: '/stock/raw-materials', element: <RequireAdmin><SuspenseWrapper><RawMaterialsPage /></SuspenseWrapper></RequireAdmin> },
+        { path: '/stock/raw-materials/:id/history', element: <RequireAdmin><SuspenseWrapper><RawMaterialStockPage /></SuspenseWrapper></RequireAdmin> },
+        { path: '/stock/product-materials', element: <RequireAdmin><SuspenseWrapper><ProductMaterialsPage /></SuspenseWrapper></RequireAdmin> },
+        { path: '/stock/production', element: <RequireAdmin><SuspenseWrapper><ProductionPage /></SuspenseWrapper></RequireAdmin> },
+        { path: '/stock/production/new', element: <RequireAdmin><SuspenseWrapper><AddProductionPage /></SuspenseWrapper></RequireAdmin> },
+        { path: '/stock/production/:id/edit', element: <RequireAdmin><SuspenseWrapper><AddProductionPage /></SuspenseWrapper></RequireAdmin> },
+        { path: '/stock/finished', element: <RequireAdmin><SuspenseWrapper><FinishedStockPage /></SuspenseWrapper></RequireAdmin> },
+        { path: '/stock/reports', element: <RequireAdmin><SuspenseWrapper><StockReportsPage /></SuspenseWrapper></RequireAdmin> },
       ],
     }],
   },

@@ -16,6 +16,11 @@ import {
   increment,
   type FirestoreError
 } from 'firebase/firestore';
+import {
+  createFinishedStockDeductionsForOrder,
+  adjustFinishedStockForOrderUpdate,
+  reverseFinishedStockForOrder,
+} from './stockDb';
 import { db } from '../lib/firebase';
 import { toast } from 'sonner';
 import { useAuthStore } from '../stores/authStore';
@@ -306,6 +311,24 @@ export async function moveToTrash(
     if (originalData?.clientId) {
       await verifyAndSyncClientTotals(originalData.clientId);
     }
+
+    // ── Stock integration — reverse order stock deductions when order is trashed ──
+    if (originalCollection === 'orders' && originalData?.items) {
+      try {
+        await reverseFinishedStockForOrder({
+          orderId: docId,
+          clientId: originalData.clientId || '',
+          clientName: originalData.clientName || '',
+          items: originalData.items,
+          orderUpdatedAt: originalData.updatedAt || '',
+          deliveryDate: originalData.deliveryDate || '',
+          division: originalData.division || 'primary',
+        });
+      } catch (stockErr) {
+        console.error('[Stock] Failed to reverse stock for trashed order:', stockErr);
+      }
+    }
+    // ── End stock integration ─────────────────────────────────────────────────
   } catch (error) {
     console.error("Error moving to trash:", error);
     toast.error('Failed to move to trash');
@@ -424,6 +447,23 @@ export async function addOrder(orderData: any) {
     
     await verifyAndSyncClientTotals(clientId);
 
+    // ── Stock integration (additive — runs after billing transaction) ────────
+    try {
+      await createFinishedStockDeductionsForOrder({
+        orderId: newOrderId,
+        clientId: orderData.clientId,
+        clientName: orderData.clientName || '',
+        items: orderData.items || [],
+        deliveryDate: orderData.deliveryDate,
+        division: orderData.division || 'primary',
+        versionKey: orderData.createdAt || new Date().toISOString(),
+      });
+    } catch (stockErr) {
+      console.error('[Stock] Failed to write stock deductions for new order:', stockErr);
+      // Billing committed successfully — stock sync failure is non-fatal and recoverable
+    }
+    // ── End stock integration ─────────────────────────────────────────────────
+
     return newOrderId;
   } catch (error) {
     console.error("Error adding order atomically:", error);
@@ -532,12 +572,35 @@ export async function updateOrder(orderId: string, updates: any) {
           }
         }
       }
-      return oldData.clientId;
+      return {
+        clientIdToSync: oldData.clientId,
+        oldItems: oldData.items,
+        oldUpdatedAt: oldData.updatedAt,
+        oldClientName: oldData.clientName,
+      };
     });
     
-    if (clientIdToSync) {
-      await verifyAndSyncClientTotals(clientIdToSync);
+    if (result.clientIdToSync) {
+      await verifyAndSyncClientTotals(result.clientIdToSync);
     }
+
+    // ── Stock integration (additive — runs after billing transaction) ────────
+    try {
+      await adjustFinishedStockForOrderUpdate({
+        orderId,
+        clientId: result.clientIdToSync,
+        clientName: result.oldClientName || '',
+        oldItems: result.oldItems || [],
+        oldUpdatedAt: result.oldUpdatedAt || '',
+        newItems: updates.items ?? result.oldItems ?? [],
+        newUpdatedAt: updates.updatedAt || new Date().toISOString(),
+        deliveryDate: updates.deliveryDate ?? (result.oldItems?.[0] ? '' : ''),
+        division: updates.division ?? 'primary',
+      });
+    } catch (stockErr) {
+      console.error('[Stock] Failed to adjust stock for order update:', stockErr);
+    }
+    // ── End stock integration ─────────────────────────────────────────────────
   } catch (error) {
     console.error("Error updating order:", error);
     toast.error('Failed to update order');
@@ -779,6 +842,27 @@ export async function restoreFromTrash(trashDocId: string, trashData: any) {
     if (trashData.originalData?.clientId) {
       await verifyAndSyncClientTotals(trashData.originalData.clientId);
     }
+
+    // ── Stock integration — re-apply stock deductions when order is restored ──
+    if (trashData.originalCollection === 'orders' && trashData.originalData?.items) {
+      try {
+        const originalOrderId = trashData.originalData.id; // always the real order ID
+        const restoreTimestamp = new Date().toISOString();
+        await createFinishedStockDeductionsForOrder({
+          orderId: originalOrderId,
+          clientId: trashData.originalData.clientId || '',
+          clientName: trashData.originalData.clientName || '',
+          items: trashData.originalData.items,
+          deliveryDate: trashData.originalData.deliveryDate || '',
+          division: trashData.originalData.division || 'primary',
+          versionKey: restoreTimestamp,
+        });
+      } catch (stockErr) {
+        console.error('[Stock] Failed to re-apply stock for restored order:', stockErr);
+      }
+    }
+    // ── End stock integration ─────────────────────────────────────────────────
+
     toast.success('Restored successfully');
   } catch (error) {
     console.error("Error restoring:", error);

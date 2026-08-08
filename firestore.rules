@@ -124,6 +124,35 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // ── Stock & Production Collections ──────────────────────────────────────
+    match /rawMaterials/{docId} {
+      allow read: if isStaff();
+      allow write: if isAdmin();
+    }
+    match /rawMaterialTransactions/{docId} {
+      allow read: if isStaff();
+      allow write: if isAdmin();
+    }
+    match /productMaterials/{docId} {
+      allow read: if isStaff();
+      allow write: if isAdmin();
+    }
+    match /productions/{docId} {
+      allow read: if isStaff();
+      allow write: if isAdmin();
+    }
+    match /finishedStockTransactions/{docId} {
+      allow read: if isStaff();
+      allow create: if isStaff();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+    match /stockSyncStatus/{docId} {
+      allow read: if isStaff();
+      allow create, update: if isStaff();
+      allow delete: if isAdmin();
+    }
+
     // ── Deny everything else ──────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;

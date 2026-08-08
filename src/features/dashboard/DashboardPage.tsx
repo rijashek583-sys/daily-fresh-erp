@@ -8,6 +8,8 @@ import { PageHeader, StatCard, Card, DataTable, Badge, type Column } from '../..
 import { formatCurrency, cn, getProductDivision } from '../../lib/utils';
 import { useAuthStore } from '../../stores/authStore';
 import { useDivisionStore } from '../../stores/divisionStore';
+import { useStockStore } from '../../stores/stockStore';
+import { getFinishedStockBalance } from '../../services/stockDb';
 import { getClientOutstanding, getPendingCollections, type PendingCollectionRow } from '../../lib/billing';
 
 
@@ -16,6 +18,19 @@ export default function DashboardPage() {
   const { user } = useAuthStore();
   const { activeDivision: activeTab } = useDivisionStore();
   const [pendingDate, setPendingDate] = React.useState(format(new Date(), 'yyyy-MM-dd'));
+
+  const { finishedStockTransactions } = useStockStore();
+  
+  const lowStockCount = React.useMemo(() => {
+    let count = 0;
+    products.forEach(p => {
+      if (p.status === 'active' && !p.deletedAt) {
+        const bal = getFinishedStockBalance(p.id, finishedStockTransactions);
+        if (bal <= 0) count++;
+      }
+    });
+    return count;
+  }, [products, finishedStockTransactions]);
 
   const { 
     computedTopClients, activeOrders,
@@ -194,7 +209,7 @@ export default function DashboardPage() {
       </div>
 
       {user?.role === 'admin' && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard
           label="Today's Revenue"
           value={formatCurrency(todaysRevenue)}
@@ -212,10 +227,16 @@ export default function DashboardPage() {
           icon={<FileText className="w-5 h-5" />}
         />
         <StatCard
-          label="Outstanding Amount"
+          label="Outstanding"
           value={formatCurrency(outstandingAmount)}
           icon={<AlertCircle className="w-5 h-5" />}
           iconBg="bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400"
+        />
+        <StatCard
+          label="Low Stock Alerts"
+          value={lowStockCount.toString()}
+          icon={<AlertTriangle className="w-5 h-5" />}
+          iconBg={lowStockCount > 0 ? "bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400" : "bg-gray-100 dark:bg-gray-800 text-gray-500"}
         />
         </div>
       )}
