@@ -1,5 +1,5 @@
 import React from 'react';
-import { IndianRupee, AlertCircle, Package, FileText, Clock, CheckCircle2 } from 'lucide-react';
+import { IndianRupee, AlertCircle, Package, FileText, Clock, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { monthlyRevenueData, DIVISION_LABELS } from '../../types';
 import { useDataStore } from '../../stores/dataStore';

@@ -474,7 +474,7 @@ export async function addOrder(orderData: any) {
 export async function updateOrder(orderId: string, updates: any) {
   enforceStaffOrAdmin();
   try {
-    const clientIdToSync = await runTransaction(db, async (transaction) => {
+    const result = await runTransaction(db, async (transaction) => {
       const orderRef = doc(db, COLLECTIONS.ORDERS, orderId);
       const orderSnap = await transaction.get(orderRef);
       if (!orderSnap.exists()) throw new Error('Order not found');

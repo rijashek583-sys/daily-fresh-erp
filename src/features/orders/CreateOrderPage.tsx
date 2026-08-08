@@ -232,7 +232,7 @@ export default function CreateOrderPage() {
               <p className="text-sm font-semibold text-gray-500 mb-0.5">Order Total ({totalItems} items)</p>
               <p className="text-2xl font-bold text-[var(--color-text-main)]">{formatCurrency(totalAmount)}</p>
             </div>
-            <Button size="lg" icon={<Save className="w-5 h-5" />} onClick={handleSave} className="w-full sm:w-auto shadow-lg shadow-red-500/20">
+            <Button size="lg" icon={<Save className="w-5 h-5" />} onClick={() => handleSave(false)} className="w-full sm:w-auto shadow-lg shadow-red-500/20">
               {isEdit ? 'Update Order' : 'Save Order'}
             </Button>
           </div>
