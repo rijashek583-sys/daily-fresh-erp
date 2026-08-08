@@ -4,12 +4,23 @@ import Sidebar from './Sidebar';
 import MobileSidebar from './MobileSidebar';
 import Header from './Header';
 import { useDataStore } from '../../stores/dataStore';
+import { useStockStore } from '../../stores/stockStore';
 import { useUIStore } from '../../stores/uiStore';
+import { useAuthStore } from '../../stores/authStore';
 import { AlertTriangle, X } from 'lucide-react';
 
 export default function AppShell() {
   const { listenerError, clearListenerError } = useDataStore();
+  const { listenerError: stockError, clearListenerError: clearStockError } = useStockStore();
   const { sidebarOpen, setSidebarOpen } = useUIStore();
+  const { user } = useAuthStore();
+
+  useEffect(() => {
+    if (user && (user.role === 'admin' || user.role === 'staff')) {
+      const unsub = useStockStore.getState().initialize();
+      return () => unsub();
+    }
+  }, [user?.role]);
 
   // Close drawer on Escape key
   useEffect(() => {
@@ -45,15 +56,15 @@ export default function AppShell() {
         <Header />
 
         {/* Firestore sync error banner */}
-        {listenerError && (
+        {(listenerError || stockError) && (
           <div
             role="alert"
             className="flex items-center gap-3 px-6 py-3 bg-red-600 text-white text-sm font-medium"
           >
             <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden="true" />
-            <span className="flex-1">{listenerError}</span>
+            <span className="flex-1">{listenerError || stockError}</span>
             <button
-              onClick={clearListenerError}
+              onClick={() => { clearListenerError(); clearStockError(); }}
               aria-label="Dismiss sync error"
               className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-white/20 transition-colors"
             >

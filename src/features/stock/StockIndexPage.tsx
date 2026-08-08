@@ -17,12 +17,11 @@ const navCards = [
 
 export default function StockIndexPage() {
   const navigate = useNavigate();
-  const { initialize, isInitialized, rawMaterials, rawMaterialTransactions, productions, finishedStockTransactions, stockSyncStatus } = useStockStore();
+  const { rawMaterials, rawMaterialTransactions, productions, finishedStockTransactions, stockSyncStatus } = useStockStore();
   const { products } = useDataStore();
 
   useEffect(() => {
-    const unsub = initialize();
-    return () => { if (!isInitialized) unsub(); };
+    // Initialization is now handled globally in AppShell
   }, []);
 
   const today = format(new Date(), 'yyyy-MM-dd');
