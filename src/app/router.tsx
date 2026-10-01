@@ -27,6 +27,7 @@ const ProductsPage = lazy(() => import('../features/products/ProductsPage'));
 const ProductFormPage = lazy(() => import('../features/products/ProductFormPage'));
 const OrdersPage = lazy(() => import('../features/orders/OrdersPage'));
 const CreateOrderPage = lazy(() => import('../features/orders/CreateOrderPage'));
+const BulkOrderPage   = lazy(() => import('../features/orders/BulkOrderPage'));
 const DailyBillingPage = lazy(() => import('../features/billing/DailyBillingPage'));
 const ClientLedgerPage = lazy(() => import('../features/ledger/ClientLedgerPage'));
 const ReportsPage = lazy(() => import('../features/reports/ReportsPage'));
@@ -69,6 +70,7 @@ const router = createBrowserRouter([
         { path: '/pricing', element: <Navigate to="/clients" replace /> },
         { path: '/orders', element: <RequireAdmin><SuspenseWrapper><OrdersPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/orders/new', element: <RequireAdmin><SuspenseWrapper><CreateOrderPage /></SuspenseWrapper></RequireAdmin> },
+        { path: '/orders/bulk', element: <RequireAdmin><SuspenseWrapper><BulkOrderPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/orders/:orderId/edit', element: <RequireAdmin><SuspenseWrapper><CreateOrderPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/billing', element: <SuspenseWrapper><DailyBillingPage /></SuspenseWrapper> },
         { path: '/ledger', element: <SuspenseWrapper><ClientLedgerPage /></SuspenseWrapper> },

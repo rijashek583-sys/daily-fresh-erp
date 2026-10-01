@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, FileText, Edit2, Trash2, Search, Calendar, MapIcon, Users } from 'lucide-react';
+import { Plus, FileText, Edit2, Trash2, Search, Calendar, MapIcon, Users, Grid } from 'lucide-react';
 import { format } from 'date-fns';
 import { type Order, type Region } from '../../types';
 import { useDataStore } from '../../stores/dataStore';
@@ -160,9 +160,14 @@ export default function OrdersPage() {
         title="Orders"
         description="Manage customer orders."
         actions={
-          <Button size="md" icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/orders/new')}>
-            Create Order
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="md" variant="secondary" icon={<Grid className="w-4 h-4" />} onClick={() => navigate('/orders/bulk')}>
+              Bulk Entry
+            </Button>
+            <Button size="md" icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/orders/new')}>
+              Create Order
+            </Button>
+          </div>
         }
       />
 
