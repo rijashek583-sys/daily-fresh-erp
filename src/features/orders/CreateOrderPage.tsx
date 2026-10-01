@@ -47,6 +47,12 @@ export default function CreateOrderPage() {
   );
 
   const getEffectivePrice = (productId: string) => {
+    if (existingOrder) {
+      const existingItem = existingOrder.items.find(i => i.productId === productId);
+      if (existingItem && typeof existingItem.unitPrice === 'number') {
+        return existingItem.unitPrice;
+      }
+    }
     if (!selectedClient) return 0;
     const product = products.find(p => p.id === productId);
     if (!product) return 0;
