@@ -2,7 +2,7 @@
 import { useNavigate } from "react-router-dom";
 import { format } from "date-fns";
 import {
-  ArrowLeft, Save, Search, Calendar, RefreshCw,
+  Save, Search, Calendar, RefreshCw,
   CheckCircle2, XCircle, MapPin,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -15,6 +15,7 @@ import { formatCurrency, cn, getProductDivision } from "../../lib/utils";
 import { resolveProductPrice } from "../../lib/pricing";
 import { type Client } from "../../types";
 
+// ── Types ─────────────────────────────────────────────────────────────────────
 interface ShopSaveResult {
   clientId: string;
   clientName: string;
@@ -23,19 +24,27 @@ interface ShopSaveResult {
 
 type SavePhase = "idle" | "saving" | "done";
 
+// ── Component ─────────────────────────────────────────────────────────────────
 export default function BulkOrderPage() {
   const { clients, products, regions } = useDataStore();
   const navigate = useNavigate();
   const { activeDivision, setDivision } = useDivisionStore();
 
+  // ── Filter state ──────────────────────────────────────────────────────────
   const [deliveryDate, setDeliveryDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [search, setSearch] = useState("");
   const [filterRegion, setFilterRegion] = useState("");
+
+  // ── Grid quantities: quantities[clientId][productId] = number ─────────────
   const [quantities, setQuantities] = useState<Record<string, Record<string, number>>>({});
+
+  // ── Save/retry state ──────────────────────────────────────────────────────
   const [savePhase, setSavePhase] = useState<SavePhase>("idle");
   const [results, setResults] = useState<ShopSaveResult[]>([]);
+  // Set of clientIds already persisted — guards against duplicate orders on retry
   const [savedClientIds, setSavedClientIds] = useState<Set<string>>(new Set());
 
+  // ── Derived: client list (all active, no region gate) ─────────────────────
   const visibleClients = useMemo(() =>
     clients
       .filter(c => c.status === "active" && !c.deletedAt)
@@ -45,19 +54,22 @@ export default function BulkOrderPage() {
     [clients, filterRegion, search],
   );
 
-  const visibleProducts = useMemo(() => {
-    const divProducts = products
+  // ── Derived: product columns ──────────────────────────────────────────────
+  // Show ALL active products in the current division as columns.
+  // We do NOT filter by price here — that is per-cell.
+  // This matches how ClientPricingPage shows all products regardless of current price.
+  const visibleProducts = useMemo(() =>
+    products
       .filter(p =>
         p.status === "active" &&
         !p.deletedAt &&
         (activeDivision === "all" || getProductDivision(p) === activeDivision),
       )
-      .sort((a, b) => (a.displayOrder ?? 99) - (b.displayOrder ?? 99));
-    return divProducts.filter(p =>
-      visibleClients.some(c => resolveProductPrice(c.id, p.id) > 0),
-    );
-  }, [products, activeDivision, visibleClients]);
+      .sort((a, b) => (a.displayOrder ?? 99) - (b.displayOrder ?? 99)),
+    [products, activeDivision],
+  );
 
+  // ── Quantity helpers ──────────────────────────────────────────────────────
   const getQty = (clientId: string, productId: string): number =>
     quantities[clientId]?.[productId] ?? 0;
 
@@ -72,12 +84,25 @@ export default function BulkOrderPage() {
     }));
   }, []);
 
+  // ── Price resolution: uses the SAME resolveProductPrice as CreateOrderPage ─
+  // For each (client, product) pair, this returns:
+  //   1. Client's custom price from clientPricing[clientId][productId]  (if set > 0)
+  //   2. Product default price from (product as any).price              (fallback)
+  //   3. 0 if neither exists → cell is disabled (dash shown, no input)
+  const getEffectivePrice = useCallback((clientId: string, productId: string): number =>
+    resolveProductPrice(clientId, productId),
+    [],
+  );
+
+  // ── Row/grand totals ──────────────────────────────────────────────────────
   const getRowTotal = useCallback((client: Client): number =>
     visibleProducts.reduce((sum, p) => {
       const qty = getQty(client.id, p.id);
-      return qty > 0 ? sum + qty * resolveProductPrice(client.id, p.id) : sum;
+      if (qty <= 0) return sum;
+      const price = getEffectivePrice(client.id, p.id);
+      return sum + qty * price;
     }, 0),
-    [quantities, visibleProducts],
+    [quantities, visibleProducts, getEffectivePrice],
   );
 
   const grandTotal = useMemo(() =>
@@ -91,6 +116,7 @@ export default function BulkOrderPage() {
     [quantities],
   );
 
+  // Shops with at least one qty > 0 that are not yet saved
   const pendingShops = useMemo(() =>
     visibleClients.filter(c =>
       !savedClientIds.has(c.id) &&
@@ -99,23 +125,41 @@ export default function BulkOrderPage() {
     [visibleClients, savedClientIds, quantities, visibleProducts],
   );
 
+  // ── Core save routine ─────────────────────────────────────────────────────
+  // Uses the SAME addOrder() function as CreateOrderPage.
+  // addOrder() atomically writes the order + ledger entries + syncs client totals.
+  // This ensures Bulk Orders appear everywhere: Orders list, Daily Bill, Client Ledger, Dashboard, Reports.
   const persistShops = async (shopList: Client[]): Promise<ShopSaveResult[]> => {
     const now = new Date().toISOString();
     const batchResults: ShopSaveResult[] = [];
+
     for (const client of shopList) {
+      // Guard: never re-save an already-successful shop (prevents duplicates on retry)
       if (savedClientIds.has(client.id)) continue;
+
       const items = visibleProducts
         .filter(p => getQty(client.id, p.id) > 0)
-        .map(p => ({
-          productId: p.id,
-          productName: p.name,
-          qty: quantities[client.id]![p.id]!,
-          unitPrice: resolveProductPrice(client.id, p.id),
-          total: quantities[client.id]![p.id]! * resolveProductPrice(client.id, p.id),
-        }));
+        .map(p => {
+          const qty = quantities[client.id]![p.id]!;
+          const unitPrice = getEffectivePrice(client.id, p.id);
+          return {
+            productId: p.id,
+            productName: p.name,
+            qty,
+            unitPrice,
+            total: qty * unitPrice,
+          };
+        });
+
       if (items.length === 0) continue;
+
       const total = items.reduce((s, i) => s + i.total, 0);
+
       try {
+        // addOrder() mirrors CreateOrderPage exactly:
+        // - Writes to COLLECTIONS.ORDERS
+        // - Creates ledger entries split by division
+        // - Calls verifyAndSyncClientTotals(clientId)
         await addOrder({
           clientId: client.id,
           clientName: client.name,
@@ -135,13 +179,19 @@ export default function BulkOrderPage() {
         batchResults.push({ clientId: client.id, clientName: client.name, status: "failed" });
       }
     }
+
     return batchResults;
   };
 
+  // ── Save all ──────────────────────────────────────────────────────────────
   const handleSaveAll = async () => {
-    if (pendingShops.length === 0) { toast.error("No quantities entered."); return; }
+    if (pendingShops.length === 0) {
+      toast.error("No quantities entered. Fill in at least one shop.");
+      return;
+    }
     setSavePhase("saving");
     const batchResults = await persistShops(pendingShops);
+
     setSavedClientIds(prev => {
       const next = new Set(prev);
       batchResults.filter(r => r.status === "success").forEach(r => next.add(r.clientId));
@@ -149,8 +199,10 @@ export default function BulkOrderPage() {
     });
     setResults(batchResults);
     setSavePhase("done");
+
     const failed = batchResults.filter(r => r.status === "failed");
     const succeeded = batchResults.filter(r => r.status === "success");
+
     if (failed.length === 0) {
       toast.success(succeeded.length + " order(s) saved successfully.");
       navigate("/orders");
@@ -159,12 +211,16 @@ export default function BulkOrderPage() {
     }
   };
 
+  // ── Retry failed ──────────────────────────────────────────────────────────
   const handleRetryFailed = async () => {
     const failedIds = new Set(results.filter(r => r.status === "failed").map(r => r.clientId));
     const toRetry = visibleClients.filter(c => failedIds.has(c.id));
     if (toRetry.length === 0) return;
+
     setSavePhase("saving");
     const retryResults = await persistShops(toRetry);
+
+    // Merge: replace only retried entries, keep previous results intact
     setResults(prev => {
       const map = new Map(prev.map(r => [r.clientId, r]));
       retryResults.forEach(r => map.set(r.clientId, r));
@@ -176,8 +232,10 @@ export default function BulkOrderPage() {
       return next;
     });
     setSavePhase("done");
+
     const stillFailed = retryResults.filter(r => r.status === "failed");
     const newSucceeded = retryResults.filter(r => r.status === "success");
+
     if (stillFailed.length === 0) {
       toast.success("All orders saved successfully.");
       navigate("/orders");
@@ -189,22 +247,16 @@ export default function BulkOrderPage() {
   const successResults = results.filter(r => r.status === "success");
   const failedResults  = results.filter(r => r.status === "failed");
 
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="max-w-full pb-24">
-      <div className="mb-6 flex items-center gap-4">
-        <button
-          onClick={() => navigate("/orders")}
-          className="flex items-center gap-2 text-sm font-medium text-gray-500 hover:text-[var(--color-primary)] transition-colors shrink-0"
-        >
-          <ArrowLeft className="w-4 h-4" /> Back to Orders
-        </button>
-      </div>
 
+      {/* ── Title + Division tabs ── */}
       <div className="mb-6 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-[var(--color-text-main)] mb-1">Bulk Order Entry</h1>
+          <h1 className="text-2xl font-bold text-[var(--color-text-main)] mb-1">New Order</h1>
           <p className="text-sm font-medium text-[var(--color-text-muted)]">
-            Enter quantities for multiple shops at once — all active shops shown together.
+            Enter quantities for one or more shops. Each shop creates one order.
           </p>
         </div>
         <div className="hidden sm:block">
@@ -212,8 +264,11 @@ export default function BulkOrderPage() {
         </div>
       </div>
 
+      {/* ── Filters card ── */}
       <Card className="mb-6">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
+          {/* Delivery date */}
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-semibold text-[var(--color-text-muted)] flex items-center gap-1.5 uppercase tracking-wider">
               <Calendar className="w-3.5 h-3.5" /> Delivery Date
@@ -226,6 +281,7 @@ export default function BulkOrderPage() {
             />
           </div>
 
+          {/* Shop search */}
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-semibold text-[var(--color-text-muted)] flex items-center gap-1.5 uppercase tracking-wider">
               <Search className="w-3.5 h-3.5" /> Search Shop
@@ -234,11 +290,12 @@ export default function BulkOrderPage() {
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Filter shops by name..."
+              placeholder="Filter by shop name..."
               className="w-full px-4 py-2.5 text-sm font-medium rounded-xl border border-gray-200 dark:border-gray-800 bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] transition-all"
             />
           </div>
 
+          {/* Region (optional) */}
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-semibold text-[var(--color-text-muted)] flex items-center gap-1.5 uppercase tracking-wider">
               <MapPin className="w-3.5 h-3.5" /> Region
@@ -254,27 +311,30 @@ export default function BulkOrderPage() {
             </select>
           </div>
 
+          {/* Division dropdown (mobile) */}
           <div className="sm:hidden">
             <DivisionDropdownMobile activeTab={activeDivision} onChange={setDivision} />
           </div>
 
+          {/* Summary (desktop 4th column) */}
           <div className="hidden lg:flex flex-col gap-1 justify-center">
             <p className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">Showing</p>
             <p className="text-sm font-bold text-[var(--color-text-main)]">
-              {visibleClients.length} shop{visibleClients.length !== 1 ? "s" : ""} &middot;{" "}
+              {visibleClients.length} shop{visibleClients.length !== 1 ? "s" : ""}&nbsp;&middot;&nbsp;
               {visibleProducts.length} product{visibleProducts.length !== 1 ? "s" : ""}
             </p>
           </div>
         </div>
       </Card>
 
+      {/* ── Save results banner ── */}
       {results.length > 0 && (
         <div className="mb-6 rounded-2xl border border-gray-200 dark:border-gray-800 overflow-hidden animate-in fade-in duration-200">
           {successResults.length > 0 && (
             <div className="px-5 py-3.5 bg-green-50 dark:bg-green-900/20 flex items-start gap-3">
               <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400 shrink-0 mt-0.5" />
               <p className="text-sm font-semibold text-green-800 dark:text-green-300">
-                {successResults.length} order(s) saved:{" "}
+                {successResults.length} order(s) saved:&nbsp;
                 <span className="font-normal">{successResults.map(r => r.clientName).join(", ")}</span>
               </p>
             </div>
@@ -285,7 +345,7 @@ export default function BulkOrderPage() {
                 <div className="flex items-center gap-2.5">
                   <XCircle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
                   <p className="text-sm font-bold text-red-800 dark:text-red-300">
-                    {failedResults.length} shop(s) failed:
+                    {failedResults.length} shop(s) failed to save:
                   </p>
                 </div>
                 <Button
@@ -311,30 +371,32 @@ export default function BulkOrderPage() {
         </div>
       )}
 
+      {/* ── Grid / empty states ── */}
       {visibleClients.length === 0 ? (
         <div className="text-center py-20 bg-[var(--color-card)] rounded-3xl border border-dashed border-gray-200 dark:border-gray-800">
           <p className="text-sm font-medium text-gray-500">No active shops match your filters.</p>
         </div>
       ) : visibleProducts.length === 0 ? (
         <div className="text-center py-20 bg-[var(--color-card)] rounded-3xl border border-dashed border-gray-200 dark:border-gray-800">
-          <p className="text-sm font-medium text-gray-500">
-            No products with a valid price found for the visible shops in this division.
-          </p>
+          <p className="text-sm font-medium text-gray-500">No active products in this division.</p>
         </div>
       ) : (
         <Card padding={false} className="overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-300">
+
+          {/* Scrollable table */}
           <div className="overflow-x-auto">
             <table
               className="w-full border-collapse text-sm"
               style={{ minWidth: (220 + visibleProducts.length * 115) + "px" }}
             >
+              {/* ── Header ── */}
               <thead>
                 <tr className="bg-gray-50/80 dark:bg-gray-900/60">
-                  <th
-                    className="sticky left-0 z-20 bg-gray-50 dark:bg-gray-900 border-b border-r border-gray-100 dark:border-gray-800 px-4 py-3.5 text-left text-[11px] font-bold text-gray-500 uppercase tracking-wider min-w-[180px] max-w-[220px]"
-                  >
+                  {/* Sticky shop column header */}
+                  <th className="sticky left-0 z-20 bg-gray-50 dark:bg-gray-900 border-b border-r border-gray-100 dark:border-gray-800 px-4 py-3.5 text-left text-[11px] font-bold text-gray-500 uppercase tracking-wider min-w-[180px] max-w-[220px]">
                     Shop
                   </th>
+                  {/* Product column headers */}
                   {visibleProducts.map(p => (
                     <th
                       key={p.id}
@@ -348,11 +410,14 @@ export default function BulkOrderPage() {
                       )}
                     </th>
                   ))}
+                  {/* Row total header */}
                   <th className="border-b border-l border-gray-100 dark:border-gray-800 px-4 py-3.5 text-right text-[11px] font-bold text-gray-500 uppercase tracking-wider min-w-[110px]">
                     Row Total
                   </th>
                 </tr>
               </thead>
+
+              {/* ── Body ── */}
               <tbody className="divide-y divide-gray-50 dark:divide-gray-800/40">
                 {visibleClients.map((client, idx) => {
                   const rowTotal  = getRowTotal(client);
@@ -382,6 +447,8 @@ export default function BulkOrderPage() {
 
                   return (
                     <tr key={client.id} className={cn("group transition-colors", rowBg)}>
+
+                      {/* ── Sticky shop cell ── */}
                       <td className={cn("sticky left-0 z-10", stickyBg, "border-r border-gray-100 dark:border-gray-800 px-4 py-2.5")}>
                         <div className="flex items-center gap-2 min-w-0">
                           {isSaved && <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />}
@@ -396,13 +463,18 @@ export default function BulkOrderPage() {
                           </span>
                         )}
                       </td>
+
+                      {/* ── Product quantity cells ── */}
                       {visibleProducts.map(p => {
-                        const price    = resolveProductPrice(client.id, p.id);
+                        // Resolve price via the same function as CreateOrderPage / OrdersPage
+                        const price    = getEffectivePrice(client.id, p.id);
                         const hasPrice = price > 0;
                         const qty      = getQty(client.id, p.id);
+
                         return (
                           <td key={p.id} className="px-2 py-2 text-center align-middle">
                             {hasPrice ? (
+                              /* Price exists for this client → allow quantity entry */
                               <input
                                 type="number"
                                 min="0"
@@ -411,7 +483,7 @@ export default function BulkOrderPage() {
                                 value={qty > 0 ? qty : ""}
                                 onChange={e => setQty(client.id, p.id, e.target.value)}
                                 disabled={isSaved}
-                                aria-label={client.name + " - " + p.name}
+                                aria-label={client.name + " - " + p.name + " (" + formatCurrency(price) + ")"}
                                 className={cn(
                                   "w-[80px] px-2 py-1.5 text-center text-sm font-bold rounded-lg outline-none transition-all",
                                   "bg-[var(--color-input-bg)] border-2 border-transparent",
@@ -421,11 +493,17 @@ export default function BulkOrderPage() {
                                 )}
                               />
                             ) : (
-                              <span className="text-gray-300 dark:text-gray-700 text-base select-none">—</span>
+                              /* No price set for this client → show dash, no input allowed */
+                              <span
+                                className="text-gray-300 dark:text-gray-700 text-base select-none"
+                                title={"No price set for " + client.name}
+                              >—</span>
                             )}
                           </td>
                         );
                       })}
+
+                      {/* ── Row total ── */}
                       <td className="border-l border-gray-100 dark:border-gray-800 px-4 py-2 text-right align-middle">
                         <span className={cn("text-sm font-bold tabular-nums", rowTotal > 0 ? "text-[var(--color-primary)]" : "text-gray-300 dark:text-gray-700")}>
                           {rowTotal > 0 ? formatCurrency(rowTotal) : "—"}
@@ -438,10 +516,11 @@ export default function BulkOrderPage() {
             </table>
           </div>
 
+          {/* ── Save / footer bar ── */}
           <div className="sticky bottom-0 px-6 py-4 border-t border-gray-100 dark:border-gray-800 bg-[var(--color-card)] flex flex-col sm:flex-row items-center justify-between gap-4 z-30">
             <div>
               <p className="text-xs font-semibold text-[var(--color-text-muted)]">
-                {pendingShops.length} shop(s) to save &middot; {totalItemCount} item(s)
+                {pendingShops.length} shop(s) ready&nbsp;&middot;&nbsp;{totalItemCount} item(s)
               </p>
               <p className="text-2xl font-bold text-[var(--color-text-main)] tabular-nums">
                 {formatCurrency(grandTotal)}
@@ -454,7 +533,9 @@ export default function BulkOrderPage() {
               disabled={savePhase === "saving" || pendingShops.length === 0}
               className="w-full sm:w-auto shadow-lg shadow-red-500/20"
             >
-              {savePhase === "saving" ? "Saving..." : "Save " + pendingShops.length + " Order" + (pendingShops.length !== 1 ? "s" : "")}
+              {savePhase === "saving"
+                ? "Saving..."
+                : "Save " + pendingShops.length + " Order" + (pendingShops.length !== 1 ? "s" : "")}
             </Button>
           </div>
         </Card>
