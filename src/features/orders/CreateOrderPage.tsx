@@ -1,13 +1,10 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { format } from 'date-fns';
-import { ArrowLeft, Save, MapIcon, Users, Calendar, Package, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Save, MapIcon, Users, Calendar, Package } from 'lucide-react';
 import { toast } from 'sonner';
 import { type Region, type Order } from '../../types';
 import { useDataStore } from '../../stores/dataStore';
-import { useAuthStore } from '../../stores/authStore';
-import { useStockStore } from '../../stores/stockStore';
-import { getFinishedStockBalance } from '../../services/stockDb';
 import { addOrder, updateOrder } from '../../services/db';
 import { Button, Card, Badge } from '../../components/ui';
 import { useDivisionStore } from '../../stores/divisionStore';
@@ -27,12 +24,6 @@ export default function CreateOrderPage() {
   const [selectedRegion, setSelectedRegion] = useState<Region | ''>(existingOrder ? (clients.find(c => c.id === existingOrder.clientId)?.region || '') : '');
   const [selectedClientId, setSelectedClientId] = useState<string>(existingOrder?.clientId || '');
   const [orderItems, setOrderItems] = useState<Record<string, number>>({});
-  
-  const [stockWarning, setStockWarning] = useState<{
-    isOpen: boolean;
-    shortages: { name: string; available: number; requested: number; shortage: number; }[];
-    pendingAction: (() => void) | null;
-  }>({ isOpen: false, shortages: [], pendingAction: null });
 
   useEffect(() => {
     if (existingOrder) {
@@ -75,7 +66,7 @@ export default function CreateOrderPage() {
 
   const totalItems = Object.values(orderItems).reduce((sum, qty) => sum + (qty || 0), 0);
 
-  const handleSave = async (bypassStockCheck = false) => {
+  const handleSave = async () => {
     if (!selectedClient) { toast.error('Please select a client.'); return; }
     if (totalItems === 0) { toast.error('Please add at least one item to the order.'); return; }
 
@@ -87,28 +78,6 @@ export default function CreateOrderPage() {
         unitPrice: getEffectivePrice(p.id),
         total: (orderItems[p.id] || 0) * getEffectivePrice(p.id)
       }));
-
-    if (!bypassStockCheck) {
-      const { finishedStockTransactions } = useStockStore.getState();
-      const shortages = newItems.map(item => {
-        const balance = getFinishedStockBalance(item.productId, finishedStockTransactions);
-        const oldQty = isEdit ? (existingOrder.items.find(i => i.productId === item.productId)?.qty || 0) : 0;
-        const available = balance + oldQty;
-        if (item.qty > available) {
-          return { name: item.productName, available, requested: item.qty, shortage: item.qty - available };
-        }
-        return null;
-      }).filter(Boolean) as any[];
-
-      if (shortages.length > 0) {
-        setStockWarning({
-          isOpen: true,
-          shortages,
-          pendingAction: () => handleSave(true)
-        });
-        return;
-      }
-    }
 
     try {
       const now = new Date().toISOString();
@@ -232,7 +201,7 @@ export default function CreateOrderPage() {
               <p className="text-sm font-semibold text-gray-500 mb-0.5">Order Total ({totalItems} items)</p>
               <p className="text-2xl font-bold text-[var(--color-text-main)]">{formatCurrency(totalAmount)}</p>
             </div>
-            <Button size="lg" icon={<Save className="w-5 h-5" />} onClick={() => handleSave(false)} className="w-full sm:w-auto shadow-lg shadow-red-500/20">
+            <Button size="lg" icon={<Save className="w-5 h-5" />} onClick={handleSave} className="w-full sm:w-auto shadow-lg shadow-red-500/20">
               {isEdit ? 'Update Order' : 'Save Order'}
             </Button>
           </div>
@@ -243,51 +212,6 @@ export default function CreateOrderPage() {
             <Users className="w-8 h-8" />
           </div>
           <p className="text-sm font-medium text-gray-500">Select a region and client to add products.</p>
-        </div>
-      )}
-
-      {stockWarning.isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
-          <div className="bg-[var(--color-card)] rounded-2xl p-6 w-full max-w-md shadow-2xl">
-            <div className="flex items-center gap-3 mb-4 text-amber-600 dark:text-amber-400">
-              <AlertTriangle className="w-6 h-6" />
-              <h2 className="text-lg font-bold text-[var(--color-text-main)]">Insufficient Stock</h2>
-            </div>
-            <p className="text-sm text-[var(--color-text-muted)] mb-4">
-              The following items do not have enough finished stock.
-            </p>
-            <div className="space-y-3 mb-6 max-h-64 overflow-y-auto custom-scrollbar pr-2">
-              {stockWarning.shortages.map(s => (
-                <div key={s.name} className="p-3 bg-red-50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900/30">
-                  <p className="font-semibold text-red-900 dark:text-red-200 mb-2">{s.name}</p>
-                  <div className="grid grid-cols-3 gap-2 text-xs">
-                    <div><span className="text-red-700/70 dark:text-red-400/70 block">Available</span><strong className="text-red-900 dark:text-red-200">{s.available}</strong></div>
-                    <div><span className="text-red-700/70 dark:text-red-400/70 block">Requested</span><strong className="text-red-900 dark:text-red-200">{s.requested}</strong></div>
-                    <div><span className="text-red-700/70 dark:text-red-400/70 block">Shortage</span><strong className="text-red-700 dark:text-red-400">{s.shortage}</strong></div>
-                  </div>
-                </div>
-              ))}
-            </div>
-            
-            <div className="flex gap-3">
-              <Button variant="secondary" className="flex-1" onClick={() => setStockWarning({ isOpen: false, shortages: [], pendingAction: null })}>
-                Cancel
-              </Button>
-              {useAuthStore.getState().user?.role === 'admin' && (
-                <Button variant="danger" className="flex-1" onClick={() => {
-                  stockWarning.pendingAction?.();
-                  setStockWarning({ isOpen: false, shortages: [], pendingAction: null });
-                }}>
-                  Proceed Anyway
-                </Button>
-              )}
-            </div>
-            {useAuthStore.getState().user?.role !== 'admin' && (
-              <p className="text-xs text-center text-red-500 font-medium mt-3">
-                Only an admin can override stock limits.
-              </p>
-            )}
-          </div>
         </div>
       )}
     </div>

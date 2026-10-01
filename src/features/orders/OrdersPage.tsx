@@ -110,19 +110,28 @@ export default function OrdersPage() {
       
       const dynamicallyPricedItems = itemsToProcess.map(item => {
         const product = products.find(p => p.id === item.productId);
-        const unitPrice = product ? resolveProductPrice(o.clientId, product.id) : item.unitPrice;
+        const unitPrice = (typeof item.unitPrice === 'number' && item.unitPrice > 0)
+          ? item.unitPrice
+          : (product ? resolveProductPrice(o.clientId, product.id) : (item.unitPrice || 0));
+        const total = (typeof item.total === 'number' && item.total > 0)
+          ? item.total
+          : unitPrice * item.qty;
         return {
           ...item,
           unitPrice,
-          total: unitPrice * item.qty
+          total
         };
       });
+
+      const orderTotal = (activeTab === 'all' && typeof o.total === 'number' && o.total > 0)
+        ? o.total
+        : dynamicallyPricedItems.reduce((sum, item) => sum + item.total, 0);
 
       return {
         ...o,
         items: dynamicallyPricedItems,
-        total: dynamicallyPricedItems.reduce((sum, item) => sum + item.total, 0),
-        subtotal: dynamicallyPricedItems.reduce((sum, item) => sum + item.total, 0)
+        total: orderTotal,
+        subtotal: orderTotal
       };
     }).filter(o => {
       if (o.items.length === 0 && activeTab !== 'all') return false;

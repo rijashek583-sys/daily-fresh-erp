@@ -9,7 +9,7 @@ import {
 import { type PaymentMethod } from '../../types';
 import { useDataStore } from '../../stores/dataStore';
 import { Button, Badge, Card, StatusSelect } from '../../components/ui';
-import { formatCurrency, cn } from '../../lib/utils';
+import { formatCurrency, cn, getProductDivision } from '../../lib/utils';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { saveClientPricing, updatePayment } from '../../services/db';
@@ -65,7 +65,7 @@ export default function ClientDetailPage() {
       const base = clientPricing[client.id] ?? {};
       setPricingState(Object.fromEntries(Object.entries(base).map(([k, v]) => [k, String(v)])));
     }
-  }, [clientId]);
+  }, [client, clientPricing]);
 
   // --- Order History Tab ---
   const clientOrders = useMemo(() => {
@@ -98,17 +98,19 @@ export default function ClientDetailPage() {
         type: l.type,
         description: l.description || (l.type === 'payment' ? `Payment received (${l.paymentMethod?.replace('_', ' ')})` : 'Daily Bill'),
         debit: l.type === 'invoice' ? l.amount : 0,
-        credit: l.type === 'payment' ? l.amount : 0
+        credit: l.type === 'payment' ? l.amount : 0,
       };
     });
-    
+
     entries.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    let bal = 0;
-    entries.forEach(e => {
-      bal += e.debit - e.credit;
-      e.balance = bal;
+
+    let runningBalance = 0;
+    const finalEntries: any[] = entries.map(e => {
+      runningBalance += (e.debit - e.credit);
+      return { ...e, balance: runningBalance };
     });
-    return entries;
+
+    return finalEntries.reverse();
   }, [client, ledger, activeDivision]);
 
   if (!client) {
@@ -122,14 +124,27 @@ export default function ClientDetailPage() {
 
   // --- Pricing Tab ---
   const handlePricingSave = async () => {
-    const newPricing: Record<string, number> = {};
+    const primaryPricing: Record<string, number> = {};
+    const bakeryPricing: Record<string, number> = {};
     Object.entries(pricingState).forEach(([pid, val]) => {
       const num = Number(val);
-      if (!isNaN(num) && num > 0) newPricing[pid] = num;
+      if (!isNaN(num) && num > 0) {
+        const prod = products.find(p => p.id === pid);
+        if (prod && getProductDivision(prod) === 'bakery') {
+          bakeryPricing[pid] = num;
+        } else {
+          primaryPricing[pid] = num;
+        }
+      }
     });
     try {
       if (client) {
-        await saveClientPricing(client.id, 'primary', newPricing);
+        if (Object.keys(primaryPricing).length > 0) {
+          await saveClientPricing(client.id, 'primary', primaryPricing);
+        }
+        if (Object.keys(bakeryPricing).length > 0) {
+          await saveClientPricing(client.id, 'bakery', bakeryPricing);
+        }
       }
       toast.success('Pricing saved!', { description: `Custom prices updated for ${client.name}` });
     } catch (e) {

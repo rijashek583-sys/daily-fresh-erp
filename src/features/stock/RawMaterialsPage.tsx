@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Search, Edit2, History, AlertTriangle, ChevronRight, TrendingUp, TrendingDown } from 'lucide-react';
+import { Plus, Search, Edit2, History, TrendingUp, TrendingDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { useStockStore } from '../../stores/stockStore';
 import { addRawMaterial, updateRawMaterial, addRawMaterialStock, getRawMaterialBalance } from '../../services/stockDb';
@@ -10,7 +10,7 @@ import type { RawMaterial, RawMaterialUnit } from '../../types/stock.types';
 const UNITS: RawMaterialUnit[] = ['KG', 'Gram', 'Litre', 'Piece', 'Box'];
 
 interface MaterialModal { mode: 'add' | 'edit'; material?: RawMaterial; }
-interface StockModal { material: RawMaterial; stockType: 'opening' | 'purchase' | 'adjustment'; }
+interface StockModal { material: RawMaterial; stockType: 'purchase' | 'adjustment'; }
 
 function MaterialForm({ modal, onClose }: { modal: MaterialModal; onClose: () => void }) {
   const [name, setName] = useState(modal.material?.name || '');
@@ -30,22 +30,34 @@ function MaterialForm({ modal, onClose }: { modal: MaterialModal; onClose: () =>
         toast.success('Raw material updated');
       }
       onClose();
-    } catch (err) { toast.error('Failed to save'); }
+    } catch { toast.error('Failed to save'); }
     setLoading(false);
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
       <div className="bg-[var(--color-card)] rounded-2xl p-6 w-full max-w-sm shadow-2xl">
-        <h2 className="text-lg font-bold text-[var(--color-text-main)] mb-5">{modal.mode === 'add' ? 'Add Raw Material' : 'Edit Raw Material'}</h2>
+        <h2 className="text-lg font-bold text-[var(--color-text-main)] mb-5">
+          {modal.mode === 'add' ? 'Add Raw Material' : 'Edit Raw Material'}
+        </h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="text-sm font-semibold text-[var(--color-text-muted)] block mb-1.5">Material Name</label>
-            <input value={name} onChange={e => setName(e.target.value)} className="w-full h-10 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-bg)] text-[var(--color-text-main)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/40" placeholder="e.g. Maida" required />
+            <input
+              value={name}
+              onChange={e => setName(e.target.value)}
+              className="w-full h-10 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-bg)] text-[var(--color-text-main)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/40"
+              placeholder="e.g. Maida"
+              required
+            />
           </div>
           <div>
             <label className="text-sm font-semibold text-[var(--color-text-muted)] block mb-1.5">Unit</label>
-            <select value={unit} onChange={e => setUnit(e.target.value as RawMaterialUnit)} className="w-full h-10 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-bg)] text-[var(--color-text-main)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/40">
+            <select
+              value={unit}
+              onChange={e => setUnit(e.target.value as RawMaterialUnit)}
+              className="w-full h-10 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-bg)] text-[var(--color-text-main)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/40"
+            >
               {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
             </select>
           </div>
@@ -81,48 +93,82 @@ function AddStockModal({ modal, onClose }: { modal: StockModal; onClose: () => v
         type: modal.stockType,
         sign: isAdjustment ? sign : 1,
         qty: qtyNum,
-        reference: modal.stockType === 'opening' ? 'Opening Stock' : modal.stockType === 'purchase' ? 'Purchase' : `Adjustment: ${notes.trim()}`,
+        reference: modal.stockType === 'purchase' ? 'Purchase' : `Adjustment: ${notes.trim()}`,
         notes: notes || undefined,
         date,
       });
-      toast.success(modal.stockType === 'opening' ? 'Opening stock added' : modal.stockType === 'purchase' ? 'Stock added' : 'Adjustment saved');
+      toast.success(modal.stockType === 'purchase' ? 'Stock added' : 'Adjustment saved');
       onClose();
     } catch { toast.error('Failed to save stock entry'); }
     setLoading(false);
   };
 
-  const title = modal.stockType === 'opening' ? 'Add Opening Stock' : modal.stockType === 'purchase' ? 'Add Purchase Stock' : 'Stock Adjustment';
+  const title = modal.stockType === 'purchase' ? 'Add Stock (Purchase)' : 'Stock Adjustment';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
       <div className="bg-[var(--color-card)] rounded-2xl p-6 w-full max-w-sm shadow-2xl">
         <h2 className="text-lg font-bold text-[var(--color-text-main)] mb-1">{title}</h2>
-        <p className="text-sm font-medium text-[var(--color-text-muted)] mb-5">{modal.material.name} · {modal.material.unit}</p>
+        <p className="text-sm font-medium text-[var(--color-text-muted)] mb-5">
+          {modal.material.name} · {modal.material.unit}
+        </p>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="text-sm font-semibold text-[var(--color-text-muted)] block mb-1.5">Date</label>
-            <input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full h-10 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-bg)] text-[var(--color-text-main)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/40" />
+            <input
+              type="date"
+              value={date}
+              onChange={e => setDate(e.target.value)}
+              className="w-full h-10 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-bg)] text-[var(--color-text-main)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/40"
+            />
           </div>
           {isAdjustment && (
             <div>
               <label className="text-sm font-semibold text-[var(--color-text-muted)] block mb-1.5">Direction</label>
               <div className="flex gap-2">
-                <button type="button" onClick={() => setSign(1)} className={`flex-1 py-2 rounded-xl border text-sm font-semibold transition-colors ${sign === 1 ? 'bg-green-500 text-white border-green-500' : 'border-gray-200 dark:border-white/10 text-[var(--color-text-muted)]'}`}>
+                <button
+                  type="button"
+                  onClick={() => setSign(1)}
+                  className={`flex-1 py-2 rounded-xl border text-sm font-semibold transition-colors ${sign === 1 ? 'bg-green-500 text-white border-green-500' : 'border-gray-200 dark:border-white/10 text-[var(--color-text-muted)]'}`}
+                >
                   + Add
                 </button>
-                <button type="button" onClick={() => setSign(-1)} className={`flex-1 py-2 rounded-xl border text-sm font-semibold transition-colors ${sign === -1 ? 'bg-red-500 text-white border-red-500' : 'border-gray-200 dark:border-white/10 text-[var(--color-text-muted)]'}`}>
+                <button
+                  type="button"
+                  onClick={() => setSign(-1)}
+                  className={`flex-1 py-2 rounded-xl border text-sm font-semibold transition-colors ${sign === -1 ? 'bg-red-500 text-white border-red-500' : 'border-gray-200 dark:border-white/10 text-[var(--color-text-muted)]'}`}
+                >
                   − Deduct
                 </button>
               </div>
             </div>
           )}
           <div>
-            <label className="text-sm font-semibold text-[var(--color-text-muted)] block mb-1.5">Quantity ({modal.material.unit})</label>
-            <input type="number" min="0.01" step="0.01" value={qty} onChange={e => setQty(e.target.value)} className="w-full h-10 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-bg)] text-[var(--color-text-main)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/40" placeholder="0.00" required />
+            <label className="text-sm font-semibold text-[var(--color-text-muted)] block mb-1.5">
+              Quantity ({modal.material.unit})
+            </label>
+            <input
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={qty}
+              onChange={e => setQty(e.target.value)}
+              className="w-full h-10 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-bg)] text-[var(--color-text-main)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/40"
+              placeholder="0.00"
+              required
+            />
           </div>
           <div>
-            <label className="text-sm font-semibold text-[var(--color-text-muted)] block mb-1.5">{isAdjustment ? 'Reason (required)' : 'Notes (optional)'}</label>
-            <input value={notes} onChange={e => setNotes(e.target.value)} className="w-full h-10 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-bg)] text-[var(--color-text-main)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/40" placeholder={isAdjustment ? 'e.g. Physical count difference' : 'Optional notes'} required={isAdjustment} />
+            <label className="text-sm font-semibold text-[var(--color-text-muted)] block mb-1.5">
+              {isAdjustment ? 'Reason (required)' : 'Notes (optional)'}
+            </label>
+            <input
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              className="w-full h-10 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-bg)] text-[var(--color-text-main)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/40"
+              placeholder={isAdjustment ? 'e.g. Physical count difference' : 'Optional notes'}
+              required={isAdjustment}
+            />
           </div>
           <div className="flex gap-3 pt-2">
             <Button type="button" variant="secondary" className="flex-1" onClick={onClose}>Cancel</Button>
@@ -174,7 +220,12 @@ export default function RawMaterialsPage() {
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--color-text-muted)]" />
-          <input value={search} onChange={e => setSearch(e.target.value)} className="w-full h-10 pl-10 pr-4 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-card)] text-[var(--color-text-main)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/40" placeholder="Search materials..." />
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="w-full h-10 pl-10 pr-4 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-card)] text-[var(--color-text-main)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/40"
+            placeholder="Search materials..."
+          />
         </div>
         <label className="flex items-center gap-2 text-sm font-medium text-[var(--color-text-muted)] cursor-pointer">
           <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} className="rounded" />
@@ -218,14 +269,41 @@ export default function RawMaterialsPage() {
                       <div className="flex items-center justify-end gap-1">
                         {m.status === 'active' && (
                           <>
-                            <button onClick={() => setStockModal({ material: m, stockType: 'opening' })} className="px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-gray-100 dark:bg-gray-800 text-[var(--color-text-muted)] hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors" title="Opening Stock">Opening</button>
-                            <button onClick={() => setStockModal({ material: m, stockType: 'purchase' })} className="px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 hover:bg-green-200 transition-colors" title="Add Stock"><TrendingUp className="w-3.5 h-3.5" /></button>
-                            <button onClick={() => setStockModal({ material: m, stockType: 'adjustment' })} className="px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 hover:bg-amber-200 transition-colors" title="Adjust"><TrendingDown className="w-3.5 h-3.5" /></button>
+                            <button
+                              onClick={() => setStockModal({ material: m, stockType: 'purchase' })}
+                              className="px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 hover:bg-green-200 transition-colors flex items-center gap-1"
+                              title="Add Stock"
+                            >
+                              <TrendingUp className="w-3.5 h-3.5" /> Add
+                            </button>
+                            <button
+                              onClick={() => setStockModal({ material: m, stockType: 'adjustment' })}
+                              className="px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 hover:bg-amber-200 transition-colors flex items-center gap-1"
+                              title="Adjust"
+                            >
+                              <TrendingDown className="w-3.5 h-3.5" /> Adjust
+                            </button>
                           </>
                         )}
-                        <button onClick={() => setMaterialModal({ mode: 'edit', material: m })} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-[var(--color-text-muted)] transition-colors"><Edit2 className="w-4 h-4" /></button>
-                        <button onClick={() => navigate(`/stock/raw-materials/${m.id}/history`)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-[var(--color-text-muted)] transition-colors"><History className="w-4 h-4" /></button>
-                        <button onClick={() => handleDeactivate(m)} disabled={deactivating === m.id} className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors ${m.status === 'active' ? 'bg-red-50 dark:bg-red-900/20 text-red-600 hover:bg-red-100' : 'bg-green-50 dark:bg-green-900/20 text-green-600 hover:bg-green-100'}`}>
+                        <button
+                          onClick={() => setMaterialModal({ mode: 'edit', material: m })}
+                          className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-[var(--color-text-muted)] transition-colors"
+                          title="Edit"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => navigate(`/stock/raw-materials/${m.id}/history`)}
+                          className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-[var(--color-text-muted)] transition-colors"
+                          title="View History"
+                        >
+                          <History className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeactivate(m)}
+                          disabled={deactivating === m.id}
+                          className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors ${m.status === 'active' ? 'bg-red-50 dark:bg-red-900/20 text-red-600 hover:bg-red-100' : 'bg-green-50 dark:bg-green-900/20 text-green-600 hover:bg-green-100'}`}
+                        >
                           {m.status === 'active' ? 'Deactivate' : 'Reactivate'}
                         </button>
                       </div>

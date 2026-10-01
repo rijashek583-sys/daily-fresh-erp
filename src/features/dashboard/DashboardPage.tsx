@@ -1,4 +1,5 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { IndianRupee, AlertCircle, Package, FileText, Clock, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { monthlyRevenueData, DIVISION_LABELS } from '../../types';
@@ -10,14 +11,16 @@ import { useAuthStore } from '../../stores/authStore';
 import { useDivisionStore } from '../../stores/divisionStore';
 import { useStockStore } from '../../stores/stockStore';
 import { getFinishedStockBalance } from '../../services/stockDb';
-import { getClientOutstanding, getPendingCollections, type PendingCollectionRow } from '../../lib/billing';
+import { getClientOutstanding, getClientMetrics, getPendingCollections, type PendingCollectionRow } from '../../lib/billing';
 
 
 export default function DashboardPage() {
   const { orders, clients, payments, products, ledger } = useDataStore();
   const { user } = useAuthStore();
+  const navigate = useNavigate();
   const { activeDivision: activeTab } = useDivisionStore();
-  const [pendingDate, setPendingDate] = React.useState(format(new Date(), 'yyyy-MM-dd'));
+  
+  const [pendingDate, setPendingDate] = React.useState<string>('');
 
   const { finishedStockTransactions } = useStockStore();
   
@@ -115,10 +118,44 @@ export default function DashboardPage() {
     };
   }, [orders, clients, payments, products, activeTab, ledger]);
 
-  const pendingCollections = React.useMemo(() => {
+  // All clients with pending outstanding balance, sorted highest to lowest
+  const overallPending = React.useMemo(() => {
     const activeClientsList = clients.filter(c => !c.deletedAt && c.status === 'active');
-    return getPendingCollections(activeTab, pendingDate, activeClientsList);
-  }, [activeTab, pendingDate, clients, ledger]);
+    
+    // If a date is selected, get per-client pending for that date
+    const datePendingMap = new Map<string, number>();
+    if (pendingDate) {
+      const dateResult = getPendingCollections(activeTab, pendingDate, activeClientsList);
+      dateResult.rows.forEach(r => {
+        datePendingMap.set(r.clientId, r.pendingAmount);
+      });
+    }
+
+    const rows = activeClientsList.map(c => {
+      const metrics = getClientMetrics(c.id, activeTab);
+      const datePending = pendingDate ? (datePendingMap.get(c.id) || 0) : 0;
+      return {
+        clientId: c.id,
+        clientName: c.name,
+        region: c.region || c.city || '-',
+        totalOrders: metrics.totalOrders,
+        totalInvoiced: metrics.totalInvoiced,
+        totalPaid: metrics.totalPaid,
+        outstanding: metrics.outstanding,
+        datePending,
+      };
+    }).filter(r => r.outstanding > 0 || (pendingDate && r.datePending > 0));
+
+    // Sort from HIGHEST outstanding to LOWEST
+    rows.sort((a, b) => b.outstanding - a.outstanding);
+
+    const totalOutstanding = rows.reduce((s, r) => s + r.outstanding, 0);
+    const totalInvoiced = rows.reduce((s, r) => s + r.totalInvoiced, 0);
+    const totalPaid = rows.reduce((s, r) => s + r.totalPaid, 0);
+    const totalDatePending = rows.reduce((s, r) => s + (r.datePending || 0), 0);
+
+    return { rows, totalOutstanding, totalInvoiced, totalPaid, totalDatePending };
+  }, [clients, ledger, orders, payments, activeTab, pendingDate]);
 
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (!active || !payload?.length) return null;
@@ -241,89 +278,110 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* ─── TODAY'S PENDING COLLECTIONS ─── */}
+      {/* ─── PENDING COLLECTIONS ─── */}
       <Card padding={false} className="mb-8">
-        <div className="px-4 sm:px-8 pt-6 sm:pt-8 pb-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
+        <div className="px-4 sm:px-8 pt-6 sm:pt-8 pb-4 flex flex-col sm:flex-row sm:items-center gap-4 sm:justify-between border-b border-gray-100 dark:border-white/[0.04]">
           <div>
             <h2 className="text-base sm:text-lg font-semibold text-[var(--color-text-main)] tracking-tight">Pending Collections</h2>
-            <p className="text-sm font-medium text-[var(--color-text-muted)] mt-0.5">Unpaid invoices for the selected date</p>
+            <p className="text-sm font-medium text-[var(--color-text-muted)] mt-0.5">
+              {pendingDate
+                ? `Showing full outstanding balances with date-specific due amounts for ${format(new Date(pendingDate.length === 10 ? `${pendingDate}T12:00:00` : pendingDate), 'MMM d, yyyy')}`
+                : 'All clients with outstanding balances (sorted highest to lowest)'}
+            </p>
           </div>
-          <div className="flex items-center gap-3">
+          
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-[var(--color-text-muted)] whitespace-nowrap">Filter by date:</span>
             <input
               type="date"
               value={pendingDate}
               onChange={(e) => setPendingDate(e.target.value)}
-              className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm font-semibold text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] cursor-pointer"
+              className="px-3 sm:px-4 py-1.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] cursor-pointer"
             />
+            {pendingDate && (
+              <button
+                type="button"
+                onClick={() => setPendingDate('')}
+                className="px-2.5 py-1.5 text-xs font-bold rounded-xl bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                title="Clear date filter to show all dates"
+              >
+                All Dates
+              </button>
+            )}
           </div>
         </div>
 
-        {pendingCollections.rows.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-center border-t border-gray-100 dark:border-white/[0.04]">
+        {overallPending.rows.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
             <div className="w-16 h-16 rounded-full bg-green-50 dark:bg-green-500/10 flex items-center justify-center mb-4">
               <CheckCircle2 className="w-8 h-8 text-green-500" />
             </div>
             <h3 className="text-lg font-bold text-[var(--color-text-main)] mb-1">All Caught Up!</h3>
-            <p className="text-sm font-semibold text-[var(--color-text-muted)]">All collections for the selected date have been completed.</p>
+            <p className="text-sm font-semibold text-[var(--color-text-muted)]">No pending or outstanding balances found.</p>
           </div>
         ) : (
           <div className="overflow-x-auto -mx-0">
-            <table className="w-full text-sm border-collapse min-w-[600px]">
+            <table className="w-full text-sm border-collapse min-w-[650px]">
               <thead>
                 <tr className="border-b border-gray-100 dark:border-white/[0.04]">
-                  {['Client', 'Division', 'Invoice Date', 'Invoice', 'Paid Today', 'Pending'].map((h, i) => (
-                    <th
-                      key={h}
-                      className={cn(
-                        'px-5 py-3 text-[11px] font-bold text-gray-400 uppercase tracking-widest',
-                        i >= 3 ? 'text-right' : 'text-left'
-                      )}
-                    >{h}</th>
-                  ))}
+                  <th className="px-5 py-3 text-[11px] font-bold text-gray-400 uppercase tracking-widest text-left">Client Details</th>
+                  <th className="px-5 py-3 text-[11px] font-bold text-gray-400 uppercase tracking-widest text-left">Location</th>
+                  <th className="px-5 py-3 text-[11px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-widest text-right">Total Outstanding</th>
+                  {pendingDate && (
+                    <th className="px-5 py-3 text-[11px] font-bold text-gray-400 uppercase tracking-widest text-right">
+                      Due on {format(new Date(pendingDate.length === 10 ? `${pendingDate}T12:00:00` : pendingDate), 'MMM d')}
+                    </th>
+                  )}
+                  <th className="px-5 py-3 text-[11px] font-bold text-gray-400 uppercase tracking-widest text-right">Total Invoiced</th>
+                  <th className="px-5 py-3 text-[11px] font-bold text-gray-400 uppercase tracking-widest text-right">Total Paid</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50 dark:divide-gray-800/40">
-                {pendingCollections.rows.map((row: PendingCollectionRow) => (
-                  <tr key={row.key} className="hover:bg-gray-50/60 dark:hover:bg-gray-800/20 transition-colors">
+                {overallPending.rows.map((row) => (
+                  <tr
+                    key={row.clientId}
+                    onClick={() => navigate(pendingDate ? `/billing?client=${row.clientId}&date=${pendingDate}` : `/billing?client=${row.clientId}`)}
+                    className="hover:bg-gray-50/60 dark:hover:bg-gray-800/20 transition-colors cursor-pointer"
+                  >
                     <td className="px-5 py-3.5">
-                      <p className="text-sm font-semibold text-[var(--color-text-main)]">{row.clientName}</p>
+                      <p className="text-sm font-semibold text-[var(--color-text-main)] hover:text-[var(--color-primary)] transition-colors">{row.clientName}</p>
+                      <p className="text-xs text-[var(--color-text-muted)]">{row.totalOrders} order{row.totalOrders !== 1 ? 's' : ''}</p>
                     </td>
                     <td className="px-5 py-3.5">
-                      {row.division === 'multiple' ? (
-                        <Badge variant="default">Multiple Divisions</Badge>
-                      ) : (
-                        <Badge variant={row.division === 'primary' ? 'info' : 'warning'}>
-                          {DIVISION_LABELS[row.division as 'primary' | 'bakery']}
-                        </Badge>
-                      )}
-                    </td>
-                    <td className="px-5 py-3.5 text-left">
-                      <span className="text-sm font-medium text-gray-500 dark:text-gray-400">
-                        {format(new Date(pendingDate), 'MMM d, yyyy')}
-                      </span>
+                      <Badge variant="gray">{row.region}</Badge>
                     </td>
                     <td className="px-5 py-3.5 text-right">
-                      <span className="text-sm font-medium text-[var(--color-text-main)]">{formatCurrency(row.invoiceAmount)}</span>
+                      <span className="text-base font-bold text-amber-600 dark:text-amber-400">{formatCurrency(row.outstanding)}</span>
+                    </td>
+                    {pendingDate && (
+                      <td className="px-5 py-3.5 text-right">
+                        {row.datePending > 0 ? (
+                          <span className="text-sm font-bold text-[var(--color-primary)]">{formatCurrency(row.datePending)}</span>
+                        ) : (
+                          <span className="text-gray-300 dark:text-gray-700">—</span>
+                        )}
+                      </td>
+                    )}
+                    <td className="px-5 py-3.5 text-right">
+                      <span className="text-sm font-medium text-[var(--color-text-main)]">{formatCurrency(row.totalInvoiced)}</span>
                     </td>
                     <td className="px-5 py-3.5 text-right">
-                      {row.paidAmount > 0 ? (
-                        <span className="text-sm font-medium text-[var(--color-success)]">{formatCurrency(row.paidAmount)}</span>
-                      ) : (
-                        <span className="text-gray-300 dark:text-gray-700">—</span>
-                      )}
-                    </td>
-                    <td className="px-5 py-3.5 text-right">
-                      <span className="text-sm font-bold text-amber-600 dark:text-amber-400">{formatCurrency(row.pendingAmount)}</span>
+                      <span className="text-sm font-medium text-[var(--color-success)]">{formatCurrency(row.totalPaid)}</span>
                     </td>
                   </tr>
                 ))}
               </tbody>
               <tfoot className="border-t-2 border-gray-100 dark:border-white/[0.06]">
                 <tr className="bg-gray-50/50 dark:bg-black/10">
-                  <td colSpan={2} className="px-5 py-3 text-xs font-bold text-[var(--color-text-muted)] uppercase tracking-wider">Total ({pendingCollections.rows.length} client{pendingCollections.rows.length !== 1 ? 's' : ''})</td>
-                  <td className="px-5 py-3 text-right text-sm font-bold text-[var(--color-text-main)]">{formatCurrency(pendingCollections.totalInvoiced)}</td>
-                  <td className="px-5 py-3 text-right text-sm font-bold text-[var(--color-success)]">{formatCurrency(pendingCollections.totalPaid)}</td>
-                  <td className="px-5 py-3 text-right text-sm font-bold text-amber-600 dark:text-amber-400">{formatCurrency(pendingCollections.totalPending)}</td>
+                  <td colSpan={2} className="px-5 py-3 text-xs font-bold text-[var(--color-text-muted)] uppercase tracking-wider">
+                    Total ({overallPending.rows.length} client{overallPending.rows.length !== 1 ? 's' : ''})
+                  </td>
+                  <td className="px-5 py-3 text-right text-base font-bold text-amber-600 dark:text-amber-400">{formatCurrency(overallPending.totalOutstanding)}</td>
+                  {pendingDate && (
+                    <td className="px-5 py-3 text-right text-sm font-bold text-[var(--color-primary)]">{formatCurrency(overallPending.totalDatePending)}</td>
+                  )}
+                  <td className="px-5 py-3 text-right text-sm font-bold text-[var(--color-text-main)]">{formatCurrency(overallPending.totalInvoiced)}</td>
+                  <td className="px-5 py-3 text-right text-sm font-bold text-[var(--color-success)]">{formatCurrency(overallPending.totalPaid)}</td>
                 </tr>
               </tfoot>
             </table>

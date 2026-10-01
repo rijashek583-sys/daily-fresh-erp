@@ -49,19 +49,54 @@ export function calculatePaymentsOnDate(clientId: string, date: string, division
 }
 
 export function getClientMetrics(clientId: string, division: FilterDivision) {
-  const { ledger } = useDataStore.getState();
+  const { ledger, orders, payments } = useDataStore.getState();
   
-  const clientLedger = ledger.filter(l => l.clientId === clientId && (division === 'all' || l.division === division));
-  const totalInvoiced = clientLedger.filter(l => l.type === 'invoice').reduce((sum, l) => sum + (l.amount || 0), 0);
-  
-  const totalPaid = clientLedger.filter(l => l.type === 'payment').reduce((sum, l) => sum + (l.amount || 0), 0);
-  const totalOrders = clientLedger.filter(l => l.type === 'invoice').length;
+  const clientLedger = ledger.filter(l => {
+    if (l.clientId !== clientId) return false;
+    if (division !== 'all') {
+      const entryDiv = l.division;
+      if (entryDiv && entryDiv !== 'all' && entryDiv !== division) return false;
+    }
+    return true;
+  });
+
+  if (clientLedger.length > 0) {
+    const totalInvoiced = clientLedger.filter(l => l.type === 'invoice').reduce((sum, l) => sum + (l.amount || 0), 0);
+    const totalPaid = clientLedger.filter(l => l.type === 'payment').reduce((sum, l) => sum + (l.amount || 0), 0);
+    const totalOrders = clientLedger.filter(l => l.type === 'invoice').length;
+
+    return {
+      totalInvoiced,
+      totalPaid,
+      outstanding: totalInvoiced - totalPaid,
+      totalOrders
+    };
+  }
+
+  // Fallback if ledger entries are not yet populated for this client:
+  const clientOrders = orders.filter(o => {
+    if (o.clientId !== clientId) return false;
+    if (division !== 'all') {
+      return (o.division as any) === 'all' || !o.division || o.division === division;
+    }
+    return true;
+  });
+  const clientPayments = payments.filter(p => {
+    if (p.clientId !== clientId || p.deletedAt) return false;
+    if (division !== 'all') {
+      return (p.division as any) === 'all' || !p.division || p.division === division;
+    }
+    return true;
+  });
+
+  const totalInvoiced = clientOrders.reduce((sum, o) => sum + (o.total || 0), 0);
+  const totalPaid = clientPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
 
   return {
     totalInvoiced,
     totalPaid,
     outstanding: totalInvoiced - totalPaid,
-    totalOrders
+    totalOrders: clientOrders.length
   };
 }
 
@@ -125,10 +160,11 @@ export function getPendingCollections(
   // Step 1: Find today's invoice ledger entries filtered by division
   const todayInvoiceEntries = ledger.filter(l => {
     if (l.type !== 'invoice') return false;
-    const entryBillDate = (l.billDate || '').substring(0, 10);
+    const entryBillDate = (l.billDate || l.createdAt || '').substring(0, 10);
     if (entryBillDate !== dateStr) return false;
     if (division !== 'all') {
-      if (l.division !== division) return false;
+      const entryDiv = l.division;
+      if (entryDiv && entryDiv !== 'all' && entryDiv !== division) return false;
     }
     return true;
   });
@@ -145,7 +181,10 @@ export function getPendingCollections(
   ledger.forEach(l => {
     if (l.type !== 'payment') return;
     if (!l.invoiceId || !todayInvoiceIds.has(l.invoiceId)) return;
-    if (division !== 'all' && l.division !== division) return;
+    if (division !== 'all') {
+      const entryDiv = l.division;
+      if (entryDiv && entryDiv !== 'all' && entryDiv !== division) return;
+    }
     
     // Composite key ensures bakery payments strictly subtract from bakery invoices
     const key = `${l.invoiceId}:${l.division || 'all'}`;

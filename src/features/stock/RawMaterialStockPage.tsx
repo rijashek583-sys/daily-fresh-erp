@@ -1,17 +1,16 @@
 import { useState, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, TrendingUp, TrendingDown, Plus } from 'lucide-react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, Plus } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import { useStockStore } from '../../stores/stockStore';
 import { addRawMaterialStock, getRawMaterialBalance } from '../../services/stockDb';
 import { Card, Button, Badge } from '../../components/ui';
-import type { RawMaterialUnit } from '../../types/stock.types';
 
 const TYPE_LABELS: Record<string, { label: string; variant: 'success' | 'danger' | 'info' | 'warning' | 'default' }> = {
   opening: { label: 'Opening', variant: 'info' },
   purchase: { label: 'Purchase', variant: 'success' },
-  production_usage: { label: 'Production Used', variant: 'danger' },
+  production_usage: { label: 'Used', variant: 'danger' },
   production_reversal: { label: 'Reversal', variant: 'warning' },
   adjustment: { label: 'Adjustment', variant: 'warning' },
 };
@@ -31,7 +30,17 @@ function AddStockInline({ materialId, materialName, unit, onClose }: { materialI
     if (stockType === 'adjustment' && !notes.trim()) return toast.error('Reason is required for adjustments');
     setLoading(true);
     try {
-      await addRawMaterialStock({ rawMaterialId: materialId, rawMaterialName: materialName, unit, type: stockType, sign: stockType === 'adjustment' ? sign : 1, qty: qtyNum, reference: stockType === 'purchase' ? 'Purchase' : stockType === 'opening' ? 'Opening Stock' : `Adjustment: ${notes.trim()}`, notes: notes || undefined, date });
+      await addRawMaterialStock({
+        rawMaterialId: materialId,
+        rawMaterialName: materialName,
+        unit,
+        type: stockType,
+        sign: stockType === 'adjustment' ? sign : 1,
+        qty: qtyNum,
+        reference: stockType === 'purchase' ? 'Purchase' : stockType === 'opening' ? 'Opening Stock' : `Adjustment: ${notes.trim()}`,
+        notes: notes || undefined,
+        date,
+      });
       toast.success('Stock entry saved');
       setQty(''); setNotes('');
     } catch { toast.error('Failed to save'); }
@@ -44,7 +53,11 @@ function AddStockInline({ materialId, materialName, unit, onClose }: { materialI
       <form onSubmit={handleSubmit} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
         <div>
           <label className="text-xs font-semibold text-[var(--color-text-muted)] block mb-1">Type</label>
-          <select value={stockType} onChange={e => setStockType(e.target.value as any)} className="w-full h-9 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-card)] text-[var(--color-text-main)] text-sm focus:outline-none">
+          <select
+            value={stockType}
+            onChange={e => setStockType(e.target.value as any)}
+            className="w-full h-9 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-card)] text-[var(--color-text-main)] text-sm focus:outline-none"
+          >
             <option value="purchase">Purchase</option>
             <option value="opening">Opening Stock</option>
             <option value="adjustment">Adjustment</option>
@@ -54,22 +67,56 @@ function AddStockInline({ materialId, materialName, unit, onClose }: { materialI
           <div>
             <label className="text-xs font-semibold text-[var(--color-text-muted)] block mb-1">Direction</label>
             <div className="flex gap-2">
-              <button type="button" onClick={() => setSign(1)} className={`flex-1 h-9 rounded-xl border text-xs font-bold transition-colors ${sign === 1 ? 'bg-green-500 text-white border-green-500' : 'border-gray-200 dark:border-white/10 text-[var(--color-text-muted)]'}`}>+ Add</button>
-              <button type="button" onClick={() => setSign(-1)} className={`flex-1 h-9 rounded-xl border text-xs font-bold transition-colors ${sign === -1 ? 'bg-red-500 text-white border-red-500' : 'border-gray-200 dark:border-white/10 text-[var(--color-text-muted)]'}`}>− Deduct</button>
+              <button
+                type="button"
+                onClick={() => setSign(1)}
+                className={`flex-1 h-9 rounded-xl border text-xs font-bold transition-colors ${sign === 1 ? 'bg-green-500 text-white border-green-500' : 'border-gray-200 dark:border-white/10 text-[var(--color-text-muted)]'}`}
+              >
+                + Add
+              </button>
+              <button
+                type="button"
+                onClick={() => setSign(-1)}
+                className={`flex-1 h-9 rounded-xl border text-xs font-bold transition-colors ${sign === -1 ? 'bg-red-500 text-white border-red-500' : 'border-gray-200 dark:border-white/10 text-[var(--color-text-muted)]'}`}
+              >
+                − Deduct
+              </button>
             </div>
           </div>
         )}
         <div>
           <label className="text-xs font-semibold text-[var(--color-text-muted)] block mb-1">Qty ({unit})</label>
-          <input type="number" min="0.01" step="0.01" value={qty} onChange={e => setQty(e.target.value)} className="w-full h-9 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-card)] text-[var(--color-text-main)] text-sm focus:outline-none" placeholder="0.00" required />
+          <input
+            type="number"
+            min="0.01"
+            step="0.01"
+            value={qty}
+            onChange={e => setQty(e.target.value)}
+            className="w-full h-9 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-card)] text-[var(--color-text-main)] text-sm focus:outline-none"
+            placeholder="0.00"
+            required
+          />
         </div>
         <div>
           <label className="text-xs font-semibold text-[var(--color-text-muted)] block mb-1">Date</label>
-          <input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full h-9 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-card)] text-[var(--color-text-main)] text-sm focus:outline-none" />
+          <input
+            type="date"
+            value={date}
+            onChange={e => setDate(e.target.value)}
+            className="w-full h-9 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-card)] text-[var(--color-text-main)] text-sm focus:outline-none"
+          />
         </div>
         <div className="sm:col-span-2 lg:col-span-2">
-          <label className="text-xs font-semibold text-[var(--color-text-muted)] block mb-1">{stockType === 'adjustment' ? 'Reason (required)' : 'Notes (optional)'}</label>
-          <input value={notes} onChange={e => setNotes(e.target.value)} className="w-full h-9 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-card)] text-[var(--color-text-main)] text-sm focus:outline-none" placeholder={stockType === 'adjustment' ? 'Reason for adjustment...' : 'Optional'} required={stockType === 'adjustment'} />
+          <label className="text-xs font-semibold text-[var(--color-text-muted)] block mb-1">
+            {stockType === 'adjustment' ? 'Reason (required)' : 'Notes (optional)'}
+          </label>
+          <input
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            className="w-full h-9 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-card)] text-[var(--color-text-main)] text-sm focus:outline-none"
+            placeholder={stockType === 'adjustment' ? 'Reason for adjustment...' : 'Optional'}
+            required={stockType === 'adjustment'}
+          />
         </div>
         <div className="flex gap-2">
           <Button type="submit" size="sm" loading={loading} className="flex-1">Save</Button>
@@ -92,7 +139,7 @@ export default function RawMaterialStockPage() {
   const allTx = useMemo(() =>
     rawMaterialTransactions
       .filter(t => t.rawMaterialId === id)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+      .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt)),
     [rawMaterialTransactions, id]
   );
 
@@ -110,17 +157,18 @@ export default function RawMaterialStockPage() {
     </div>
   );
 
-  let runningBalance = balance;
-
   return (
     <div className="max-w-4xl mx-auto space-y-6 pb-12">
       <div className="flex items-center gap-4">
-        <button onClick={() => navigate('/stock/raw-materials')} className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 text-[var(--color-text-muted)] transition-colors">
+        <button
+          onClick={() => navigate('/stock/raw-materials')}
+          className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 text-[var(--color-text-muted)] transition-colors"
+        >
           <ArrowLeft className="w-5 h-5" />
         </button>
         <div className="flex-1">
           <h1 className="text-2xl font-bold text-[var(--color-text-main)]">{material.name}</h1>
-          <p className="text-sm font-medium text-[var(--color-text-muted)]">Raw Material Stock History</p>
+          <p className="text-sm font-medium text-[var(--color-text-muted)]">Stock History</p>
         </div>
         <Button icon={<Plus className="w-4 h-4" />} onClick={() => setShowAddStock(!showAddStock)}>
           Add Stock
@@ -137,7 +185,7 @@ export default function RawMaterialStockPage() {
           <p className="text-base font-semibold text-[var(--color-text-muted)] mt-1">{material.unit}</p>
         </div>
         <div className="sm:col-span-2 bg-[var(--color-card)] rounded-2xl p-6 border border-gray-100 dark:border-white/[0.05]">
-          <p className="text-sm font-semibold text-[var(--color-text-muted)] mb-3">Quick Stats</p>
+          <p className="text-sm font-semibold text-[var(--color-text-muted)] mb-3">Summary</p>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <p className="text-xs font-medium text-[var(--color-text-muted)]">Total In</p>
@@ -164,20 +212,39 @@ export default function RawMaterialStockPage() {
       </div>
 
       {showAddStock && (
-        <AddStockInline materialId={material.id} materialName={material.name} unit={material.unit} onClose={() => setShowAddStock(false)} />
+        <AddStockInline
+          materialId={material.id}
+          materialName={material.name}
+          unit={material.unit}
+          onClose={() => setShowAddStock(false)}
+        />
       )}
 
       {/* Date filter */}
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="flex-1">
           <label className="text-xs font-semibold text-[var(--color-text-muted)] block mb-1">From Date</label>
-          <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="w-full h-9 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-card)] text-[var(--color-text-main)] text-sm focus:outline-none" />
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={e => setDateFrom(e.target.value)}
+            className="w-full h-9 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-card)] text-[var(--color-text-main)] text-sm focus:outline-none"
+          />
         </div>
         <div className="flex-1">
           <label className="text-xs font-semibold text-[var(--color-text-muted)] block mb-1">To Date</label>
-          <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="w-full h-9 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-card)] text-[var(--color-text-main)] text-sm focus:outline-none" />
+          <input
+            type="date"
+            value={dateTo}
+            onChange={e => setDateTo(e.target.value)}
+            className="w-full h-9 px-3 rounded-xl border border-gray-200 dark:border-white/10 bg-[var(--color-card)] text-[var(--color-text-main)] text-sm focus:outline-none"
+          />
         </div>
-        {(dateFrom || dateTo) && <Button variant="ghost" size="sm" className="sm:self-end" onClick={() => { setDateFrom(''); setDateTo(''); }}>Clear</Button>}
+        {(dateFrom || dateTo) && (
+          <Button variant="ghost" size="sm" className="sm:self-end" onClick={() => { setDateFrom(''); setDateTo(''); }}>
+            Clear
+          </Button>
+        )}
       </div>
 
       {/* Transaction history */}
@@ -191,27 +258,25 @@ export default function RawMaterialStockPage() {
                 <th className="text-left py-2 px-4 text-xs font-bold text-[var(--color-text-muted)] uppercase tracking-wider">Type</th>
                 <th className="text-left py-2 px-4 text-xs font-bold text-[var(--color-text-muted)] uppercase tracking-wider">Reference</th>
                 <th className="text-right py-2 px-4 text-xs font-bold text-[var(--color-text-muted)] uppercase tracking-wider">Qty</th>
-                <th className="text-right py-2 px-4 text-xs font-bold text-[var(--color-text-muted)] uppercase tracking-wider">Balance</th>
               </tr>
             </thead>
             <tbody>
               {filteredTx.length === 0 && (
-                <tr><td colSpan={5} className="text-center py-10 text-[var(--color-text-muted)] text-sm font-medium">No transactions found.</td></tr>
+                <tr><td colSpan={4} className="text-center py-10 text-[var(--color-text-muted)] text-sm font-medium">No transactions found.</td></tr>
               )}
-              {filteredTx.map((t, i) => {
-                // Build running balance going backwards
-                const rowBalance = i === 0 ? balance : undefined;
+              {filteredTx.map(t => {
                 const typeInfo = TYPE_LABELS[t.type] || { label: t.type, variant: 'default' as const };
                 const signed = t.signedQty;
                 return (
                   <tr key={t.id} className="border-b border-gray-50 dark:border-white/5 hover:bg-gray-50/50 dark:hover:bg-white/[0.02]">
                     <td className="py-3 px-4 text-[var(--color-text-muted)]">{format(new Date(t.date), 'dd MMM yyyy')}</td>
                     <td className="py-3 px-4"><Badge variant={typeInfo.variant as any}>{typeInfo.label}</Badge></td>
-                    <td className="py-3 px-4 text-[var(--color-text-muted)] max-w-[200px] truncate">{t.reference}{t.notes && t.notes !== t.reference ? ` — ${t.notes}` : ''}</td>
+                    <td className="py-3 px-4 text-[var(--color-text-muted)] max-w-[200px] truncate">
+                      {t.reference}{t.notes && t.notes !== t.reference ? ` — ${t.notes}` : ''}
+                    </td>
                     <td className={`py-3 px-4 text-right font-bold tabular-nums ${signed > 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                       {signed > 0 ? '+' : ''}{signed.toLocaleString(undefined, { maximumFractionDigits: 2 })} {t.unit}
                     </td>
-                    <td className="py-3 px-4 text-right font-semibold text-[var(--color-text-muted)] tabular-nums">—</td>
                   </tr>
                 );
               })}
