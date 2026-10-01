@@ -1,4 +1,4 @@
-﻿import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { format } from "date-fns";
 import {
@@ -26,7 +26,7 @@ type SavePhase = "idle" | "saving" | "done";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function BulkOrderPage() {
-  const { clients, products, regions } = useDataStore();
+  const { clients, products, regions, clientPricing } = useDataStore();
   const navigate = useNavigate();
   const { activeDivision, setDivision } = useDivisionStore();
 
@@ -56,8 +56,7 @@ export default function BulkOrderPage() {
 
   // ── Derived: product columns ──────────────────────────────────────────────
   // Show ALL active products in the current division as columns.
-  // We do NOT filter by price here — that is per-cell.
-  // This matches how ClientPricingPage shows all products regardless of current price.
+  // We do NOT filter by price here — all active products are orderable.
   const visibleProducts = useMemo(() =>
     products
       .filter(p =>
@@ -88,10 +87,10 @@ export default function BulkOrderPage() {
   // For each (client, product) pair, this returns:
   //   1. Client's custom price from clientPricing[clientId][productId]  (if set > 0)
   //   2. Product default price from (product as any).price              (fallback)
-  //   3. 0 if neither exists → cell is disabled (dash shown, no input)
+  //   3. 0 if neither exists → used for billing/totals, NEVER controls input rendering
   const getEffectivePrice = useCallback((clientId: string, productId: string): number =>
     resolveProductPrice(clientId, productId),
-    [],
+    [clientPricing],
   );
 
   // ── Row/grand totals ──────────────────────────────────────────────────────
@@ -420,16 +419,16 @@ export default function BulkOrderPage() {
               {/* ── Body ── */}
               <tbody className="divide-y divide-gray-50 dark:divide-gray-800/40">
                 {visibleClients.map((client, idx) => {
-                  const rowTotal  = getRowTotal(client);
-                  const isSaved   = savedClientIds.has(client.id);
-                  const hasFailed = failedResults.some(r => r.clientId === client.id);
-                  const hasItems  = rowTotal > 0;
+                  const rowTotal      = getRowTotal(client);
+                  const isSaved       = savedClientIds.has(client.id);
+                  const hasFailed     = failedResults.some(r => r.clientId === client.id);
+                  const hasEnteredQty = visibleProducts.some(p => getQty(client.id, p.id) > 0);
 
                   const rowBg = isSaved
                     ? "bg-green-50/60 dark:bg-green-900/10"
                     : hasFailed
                     ? "bg-red-50/60 dark:bg-red-900/10"
-                    : hasItems
+                    : hasEnteredQty
                     ? "bg-[var(--color-primary)]/[0.025] dark:bg-[var(--color-primary)]/[0.04]"
                     : idx % 2 === 0
                     ? "bg-[var(--color-card)]"
@@ -439,7 +438,7 @@ export default function BulkOrderPage() {
                     ? "bg-green-50 dark:bg-green-900/20"
                     : hasFailed
                     ? "bg-red-50 dark:bg-red-900/20"
-                    : hasItems
+                    : hasEnteredQty
                     ? "bg-white dark:bg-gray-900"
                     : idx % 2 === 0
                     ? "bg-[var(--color-card)]"
@@ -466,47 +465,46 @@ export default function BulkOrderPage() {
 
                       {/* ── Product quantity cells ── */}
                       {visibleProducts.map(p => {
-                        // Resolve price via the same function as CreateOrderPage / OrdersPage
-                        const price    = getEffectivePrice(client.id, p.id);
-                        const hasPrice = price > 0;
-                        const qty      = getQty(client.id, p.id);
+                        // Resolve price for totals (custom price → default price → 0)
+                        // Input is ALWAYS rendered and editable for EVERY shop and EVERY product.
+                        const price = getEffectivePrice(client.id, p.id);
+                        const qty   = getQty(client.id, p.id);
 
                         return (
                           <td key={p.id} className="px-2 py-2 text-center align-middle">
-                            {hasPrice ? (
-                              /* Price exists for this client → allow quantity entry */
-                              <input
-                                type="number"
-                                min="0"
-                                inputMode="numeric"
-                                placeholder="0"
-                                value={qty > 0 ? qty : ""}
-                                onChange={e => setQty(client.id, p.id, e.target.value)}
-                                disabled={isSaved}
-                                aria-label={client.name + " - " + p.name + " (" + formatCurrency(price) + ")"}
-                                className={cn(
-                                  "w-[80px] px-2 py-1.5 text-center text-sm font-bold rounded-lg outline-none transition-all",
-                                  "bg-[var(--color-input-bg)] border-2 border-transparent",
-                                  "focus:border-[var(--color-primary)] focus:bg-[var(--color-card)]",
-                                  "disabled:opacity-40 disabled:cursor-not-allowed",
-                                  qty > 0 ? "text-[var(--color-primary)]" : "text-[var(--color-text-muted)]",
-                                )}
-                              />
-                            ) : (
-                              /* No price set for this client → show dash, no input allowed */
-                              <span
-                                className="text-gray-300 dark:text-gray-700 text-base select-none"
-                                title={"No price set for " + client.name}
-                              >—</span>
-                            )}
+                            <input
+                              type="number"
+                              min="0"
+                              inputMode="numeric"
+                              placeholder="0"
+                              value={qty > 0 ? qty : ""}
+                              onChange={e => setQty(client.id, p.id, e.target.value)}
+                              disabled={isSaved}
+                              title={`${client.name} - ${p.name}${price > 0 ? ` (${formatCurrency(price)})` : ""}`}
+                              aria-label={`${client.name} - ${p.name}${price > 0 ? ` (${formatCurrency(price)})` : ""}`}
+                              className={cn(
+                                "w-[80px] px-2 py-1.5 text-center text-sm font-bold rounded-lg outline-none transition-all",
+                                "bg-[var(--color-input-bg)] border-2 border-transparent",
+                                "focus:border-[var(--color-primary)] focus:bg-[var(--color-card)]",
+                                "disabled:opacity-40 disabled:cursor-not-allowed",
+                                qty > 0 ? "text-[var(--color-primary)]" : "text-[var(--color-text-muted)]",
+                              )}
+                            />
                           </td>
                         );
                       })}
 
                       {/* ── Row total ── */}
                       <td className="border-l border-gray-100 dark:border-gray-800 px-4 py-2 text-right align-middle">
-                        <span className={cn("text-sm font-bold tabular-nums", rowTotal > 0 ? "text-[var(--color-primary)]" : "text-gray-300 dark:text-gray-700")}>
-                          {rowTotal > 0 ? formatCurrency(rowTotal) : "—"}
+                        <span className={cn(
+                          "text-sm font-bold tabular-nums",
+                          rowTotal > 0
+                            ? "text-[var(--color-primary)]"
+                            : hasEnteredQty
+                            ? "text-[var(--color-text-main)]"
+                            : "text-gray-300 dark:text-gray-700"
+                        )}>
+                          {hasEnteredQty ? formatCurrency(rowTotal) : "—"}
                         </span>
                       </td>
                     </tr>
