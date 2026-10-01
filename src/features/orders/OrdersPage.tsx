@@ -10,7 +10,6 @@ import { toast } from 'sonner';
 import { moveToTrash } from '../../services/db';
 import { useAuthStore } from '../../stores/authStore';
 import { formatCurrency, cn, getProductDivision } from '../../lib/utils';
-import { resolveProductPrice } from '../../lib/pricing';
 export default function OrdersPage() {
   const { clients, orders, regions, products } = useDataStore();
   const navigate = useNavigate();
@@ -108,14 +107,9 @@ export default function OrdersPage() {
         });
       }
       
-      const dynamicallyPricedItems = itemsToProcess.map(item => {
-        const product = products.find(p => p.id === item.productId);
-        const unitPrice = (typeof item.unitPrice === 'number' && item.unitPrice > 0)
-          ? item.unitPrice
-          : (product ? resolveProductPrice(o.clientId, product.id) : (item.unitPrice || 0));
-        const total = (typeof item.total === 'number' && item.total > 0)
-          ? item.total
-          : unitPrice * item.qty;
+      const processedItems = itemsToProcess.map(item => {
+        const unitPrice = typeof item.unitPrice === 'number' ? item.unitPrice : 0;
+        const total = typeof item.total === 'number' ? item.total : unitPrice * item.qty;
         return {
           ...item,
           unitPrice,
@@ -123,13 +117,13 @@ export default function OrdersPage() {
         };
       });
 
-      const orderTotal = (activeTab === 'all' && typeof o.total === 'number' && o.total > 0)
+      const orderTotal = activeTab === 'all' && typeof o.total === 'number'
         ? o.total
-        : dynamicallyPricedItems.reduce((sum, item) => sum + item.total, 0);
+        : processedItems.reduce((sum, item) => sum + item.total, 0);
 
       return {
         ...o,
-        items: dynamicallyPricedItems,
+        items: processedItems,
         total: orderTotal,
         subtotal: orderTotal
       };

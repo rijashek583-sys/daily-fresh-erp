@@ -5,7 +5,6 @@ import { type Region, type Division, type PaymentMethod } from '../../types';
 import { useDataStore } from '../../stores/dataStore';
 import { Card, PageHeader, SearchInput, Button } from '../../components/ui';
 import { formatCurrency, cn, getProductDivision } from '../../lib/utils';
-import { resolveProductPrice } from '../../lib/pricing';
 import { calculateOldBalance, calculatePaymentsOnDate, recordPayment, getPaymentUpdateInfo } from '../../lib/billing';
 import { useAuthStore } from '../../stores/authStore';
 import { useDivisionStore } from '../../stores/divisionStore';
@@ -110,12 +109,8 @@ export default function DailyBillingPage() {
         o.items.forEach(i => {
           const prod = products.find(p => p.id === i.productId);
           const div = getProductDivision(prod || { name: i.productName });
-          const itemPrice = (typeof i.unitPrice === 'number' && i.unitPrice > 0)
-            ? i.unitPrice
-            : (prod ? resolveProductPrice(o.clientId, prod.id) : (i.unitPrice || 0));
-          const itemTotal = (typeof i.total === 'number' && i.total > 0)
-            ? i.total
-            : itemPrice * i.qty;
+          const itemPrice = typeof i.unitPrice === 'number' ? i.unitPrice : 0;
+          const itemTotal = typeof i.total === 'number' ? i.total : itemPrice * i.qty;
           const key = `${i.productName}-${div}`;
           if (!itemsMap.has(key)) {
             itemsMap.set(key, { qty: 0, unitPrice: itemPrice, total: 0, division: div });

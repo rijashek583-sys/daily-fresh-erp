@@ -2,7 +2,6 @@ import { type PaymentMethod, type Payment, type FilterDivision } from '../types'
 import { useDataStore } from '../stores/dataStore';
 import { format } from 'date-fns';
 import { recordPaymentAtomic, updatePayment as dbUpdatePayment } from '../services/db';
-import { resolveProductPrice } from './pricing';
 import { getProductDivision } from './utils';
 /**
  * Calculates a client's old balance strictly BEFORE the provided date.

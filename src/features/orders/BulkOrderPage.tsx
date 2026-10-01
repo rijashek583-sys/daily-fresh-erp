@@ -472,24 +472,29 @@ export default function BulkOrderPage() {
 
                         return (
                           <td key={p.id} className="px-2 py-2 text-center align-middle">
-                            <input
-                              type="number"
-                              min="0"
-                              inputMode="numeric"
-                              placeholder="0"
-                              value={qty > 0 ? qty : ""}
-                              onChange={e => setQty(client.id, p.id, e.target.value)}
-                              disabled={isSaved}
-                              title={`${client.name} - ${p.name}${price > 0 ? ` (${formatCurrency(price)})` : ""}`}
-                              aria-label={`${client.name} - ${p.name}${price > 0 ? ` (${formatCurrency(price)})` : ""}`}
-                              className={cn(
-                                "w-[80px] px-2 py-1.5 text-center text-sm font-bold rounded-lg outline-none transition-all",
-                                "bg-[var(--color-input-bg)] border-2 border-transparent",
-                                "focus:border-[var(--color-primary)] focus:bg-[var(--color-card)]",
-                                "disabled:opacity-40 disabled:cursor-not-allowed",
-                                qty > 0 ? "text-[var(--color-primary)]" : "text-[var(--color-text-muted)]",
-                              )}
-                            />
+                            <div className="flex flex-col items-center">
+                              <input
+                                type="number"
+                                min="0"
+                                inputMode="numeric"
+                                placeholder="0"
+                                value={qty > 0 ? qty : ""}
+                                onChange={e => setQty(client.id, p.id, e.target.value)}
+                                disabled={isSaved}
+                                title={`${client.name} - ${p.name}${price > 0 ? ` (${formatCurrency(price)})` : ""}`}
+                                aria-label={`${client.name} - ${p.name}${price > 0 ? ` (${formatCurrency(price)})` : ""}`}
+                                className={cn(
+                                  "w-[80px] px-2 py-1.5 text-center text-sm font-bold rounded-lg outline-none transition-all",
+                                  "bg-[var(--color-input-bg)] border-2 border-transparent",
+                                  "focus:border-[var(--color-primary)] focus:bg-[var(--color-card)]",
+                                  "disabled:opacity-40 disabled:cursor-not-allowed",
+                                  qty > 0 ? "text-[var(--color-primary)]" : "text-[var(--color-text-muted)]",
+                                )}
+                              />
+                              <span className="block text-[10px] text-gray-400 dark:text-gray-500 font-medium mt-0.5 select-none h-3.5 leading-none">
+                                {price > 0 ? formatCurrency(price) : ""}
+                              </span>
+                            </div>
                           </td>
                         );
                       })}

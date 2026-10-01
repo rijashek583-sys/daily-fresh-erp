@@ -77,7 +77,21 @@ export const useDataStore = create<DataState>((set) => ({
       (data) => {
         const pricingMap: Record<string, Record<string, number>> = {};
         data.forEach((doc: any) => {
-          pricingMap[doc.id] = { ...(doc.all || {}), ...(doc.primary || {}), ...(doc.bakery || {}) };
+          // Direct numeric price keys on the document (if any)
+          const directPrices: Record<string, number> = {};
+          Object.keys(doc).forEach(k => {
+            if (!['id', 'clientId', 'createdAt', 'updatedAt', 'pricing', 'all', 'primary', 'bakery'].includes(k) && typeof doc[k] === 'number') {
+              directPrices[k] = doc[k];
+            }
+          });
+          // Merge doc.pricing, doc.all, doc.primary, doc.bakery (with division-specific overrides if applicable)
+          pricingMap[doc.id] = {
+            ...directPrices,
+            ...(doc.pricing || {}),
+            ...(doc.all || {}),
+            ...(doc.primary || {}),
+            ...(doc.bakery || {})
+          };
         });
         set({ clientPricing: pricingMap });
       },
