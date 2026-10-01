@@ -4,7 +4,6 @@ import { ProtectedRoute } from './ProtectedRoute';
 import { RequireAdmin } from './RequireAdmin';
 import AppShell from '../components/layout/AppShell';
 import LoginPage from '../features/auth/LoginPage';
-
 import { useAuthStore } from '../stores/authStore';
 
 function RootRedirect() {
@@ -14,7 +13,7 @@ function RootRedirect() {
   }
   if (!user) return <Navigate to="/login" replace />;
   if (user.role === 'admin') return <Navigate to="/dashboard" replace />;
-  return <Navigate to="/dashboard" replace />;
+  return <Navigate to="/payments" replace />;
 }
 
 // Lazy-loaded pages for code splitting
@@ -33,6 +32,7 @@ const ClientLedgerPage = lazy(() => import('../features/ledger/ClientLedgerPage'
 const ReportsPage = lazy(() => import('../features/reports/ReportsPage'));
 const SettingsPage = lazy(() => import('../features/settings/SettingsPage'));
 const TrashPage = lazy(() => import('../features/settings/TrashPage'));
+const PaymentsCollectionPage = lazy(() => import('../features/payments/PaymentsCollectionPage'));
 
 function PageLoader() {
   return (
@@ -59,19 +59,20 @@ const router = createBrowserRouter([
       children: [
         { path: '/', element: <RootRedirect /> },
         { path: '/dashboard', element: <SuspenseWrapper><DashboardPage /></SuspenseWrapper> },
-        { path: '/clients', element: <RequireAdmin><SuspenseWrapper><ClientsPage /></SuspenseWrapper></RequireAdmin> },
+        { path: '/clients', element: <SuspenseWrapper><ClientsPage /></SuspenseWrapper> },
         { path: '/clients/new', element: <RequireAdmin><SuspenseWrapper><AddClientPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/clients/:clientId/edit', element: <RequireAdmin><SuspenseWrapper><EditClientPage /></SuspenseWrapper></RequireAdmin> },
-        { path: '/clients/:clientId', element: <RequireAdmin><SuspenseWrapper><ClientDetailPage /></SuspenseWrapper></RequireAdmin> },
+        { path: '/clients/:clientId', element: <SuspenseWrapper><ClientDetailPage /></SuspenseWrapper> },
         { path: '/products', element: <RequireAdmin><SuspenseWrapper><ProductsPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/products/new', element: <RequireAdmin><SuspenseWrapper><ProductFormPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/products/:productId/edit', element: <RequireAdmin><SuspenseWrapper><ProductFormPage /></SuspenseWrapper></RequireAdmin> },
         // /pricing redirects to /clients for backward compatibility
         { path: '/pricing', element: <Navigate to="/clients" replace /> },
-        { path: '/orders', element: <RequireAdmin><SuspenseWrapper><OrdersPage /></SuspenseWrapper></RequireAdmin> },
+        { path: '/orders', element: <SuspenseWrapper><OrdersPage /></SuspenseWrapper> },
         { path: '/orders/new', element: <RequireAdmin><SuspenseWrapper><CreateOrderPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/orders/bulk', element: <RequireAdmin><SuspenseWrapper><BulkOrderPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/orders/:orderId/edit', element: <RequireAdmin><SuspenseWrapper><CreateOrderPage /></SuspenseWrapper></RequireAdmin> },
+        { path: '/payments', element: <SuspenseWrapper><PaymentsCollectionPage /></SuspenseWrapper> },
         { path: '/billing', element: <SuspenseWrapper><DailyBillingPage /></SuspenseWrapper> },
         { path: '/ledger', element: <SuspenseWrapper><ClientLedgerPage /></SuspenseWrapper> },
         { path: '/reports', element: <RequireAdmin><SuspenseWrapper><ReportsPage /></SuspenseWrapper></RequireAdmin> },

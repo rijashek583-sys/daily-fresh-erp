@@ -157,6 +157,19 @@ export default function ClientsPage() {
         />
       ),
     });
+  } else {
+    columns.push({
+      key: 'actions', label: '', align: 'right',
+      render: (r) => (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); navigate(`/clients/${r.id}`); }}
+          className="text-xs font-semibold text-[var(--color-primary)] hover:underline px-3 py-1.5"
+        >
+          View &rarr;
+        </button>
+      ),
+    });
   }
 
   return (

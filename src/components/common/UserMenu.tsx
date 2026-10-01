@@ -35,19 +35,26 @@ export default function UserMenu() {
           <div className="px-5 py-3 border-b border-gray-100 dark:border-white/[0.05] mb-2">
             <p className="text-sm font-bold text-[var(--color-text-main)] truncate">{user.name}</p>
             <p className="text-xs text-[var(--color-text-muted)] truncate">{user.email}</p>
+            <span className="inline-block mt-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-950/40 text-[var(--color-primary)] uppercase tracking-wider">
+              {user.role}
+            </span>
           </div>
 
-          <button onClick={() => { setOpen(false); navigate('/settings'); }} className="w-full flex items-center gap-3 px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
-            <User className="w-4 h-4 text-gray-400" />
-            Profile
-          </button>
-          
-          <button onClick={() => { setOpen(false); navigate('/settings'); }} className="w-full flex items-center gap-3 px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
-            <SettingsIcon className="w-4 h-4 text-gray-400" />
-            Settings
-          </button>
+          {user.role === 'admin' && (
+            <>
+              <button onClick={() => { setOpen(false); navigate('/settings'); }} className="w-full flex items-center gap-3 px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                <User className="w-4 h-4 text-gray-400" />
+                Profile
+              </button>
+              
+              <button onClick={() => { setOpen(false); navigate('/settings'); }} className="w-full flex items-center gap-3 px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                <SettingsIcon className="w-4 h-4 text-gray-400" />
+                Settings
+              </button>
 
-          <div className="h-px bg-gray-100 dark:bg-white/[0.05] my-2" />
+              <div className="h-px bg-gray-100 dark:bg-white/[0.05] my-2" />
+            </>
+          )}
 
           <button
             onClick={() => { setOpen(false); logout(); navigate('/login'); }}

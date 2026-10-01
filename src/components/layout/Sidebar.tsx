@@ -1,29 +1,40 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Package, ShoppingCart,
-  BarChart3, Settings, X, BookOpen, ChevronRight, Receipt, Trash2, LogOut
+  BarChart3, Settings, BookOpen, ChevronRight, Receipt, Trash2, CreditCard
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useAuthStore } from '../../stores/authStore';
 
-interface NavItem { label: string; href: string; icon: React.ElementType; adminOnly?: boolean; }
+interface NavItem {
+  label: string;
+  href: string;
+  icon: React.ElementType;
+}
 
-const navItems: NavItem[] = [
+const adminNavItems: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { label: 'Orders', href: '/orders', icon: ShoppingCart, adminOnly: true },
-  { label: 'Clients', href: '/clients', icon: Users, adminOnly: true },
-  { label: 'Products', href: '/products', icon: Package, adminOnly: true },
+  { label: 'Orders', href: '/orders', icon: ShoppingCart },
+  { label: 'Clients', href: '/clients', icon: Users },
+  { label: 'Payments', href: '/payments', icon: CreditCard },
+  { label: 'Products', href: '/products', icon: Package },
   { label: 'Daily Bill', href: '/billing', icon: Receipt },
-  { label: 'Client Ledger', href: '/ledger', icon: BookOpen, adminOnly: true },
-  { label: 'Reports', href: '/reports', icon: BarChart3, adminOnly: true },
-  { label: 'Settings', href: '/settings', icon: Settings, adminOnly: true },
-  { label: 'Trash', href: '/trash', icon: Trash2, adminOnly: true },
+  { label: 'Client Ledger', href: '/ledger', icon: BookOpen },
+  { label: 'Reports', href: '/reports', icon: BarChart3 },
+  { label: 'Settings', href: '/settings', icon: Settings },
+  { label: 'Trash', href: '/trash', icon: Trash2 },
+];
+
+const staffNavItems: NavItem[] = [
+  { label: 'Clients', href: '/clients', icon: Users },
+  { label: 'Orders', href: '/orders', icon: ShoppingCart },
+  { label: 'Payments / Collection', href: '/payments', icon: CreditCard },
 ];
 
 export default function Sidebar() {
   const { user } = useAuthStore();
   const isAdmin = user?.role === 'admin';
-  const visible = navItems.filter(i => !i.adminOnly || isAdmin);
+  const visible = isAdmin ? adminNavItems : staffNavItems;
 
   return (
     <aside className="fixed left-0 top-0 w-[280px] h-screen bg-[var(--color-bg)] border-r border-black/[0.04] dark:border-white/[0.04] hidden md:flex flex-col z-30 transition-colors duration-300">
@@ -34,7 +45,9 @@ export default function Sidebar() {
         </div>
         <div>
           <h1 className="text-base font-extrabold text-[var(--color-text-main)] tracking-tight leading-tight">Daily Fresh</h1>
-          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">Billing System</p>
+          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">
+            {isAdmin ? 'Billing System' : 'Staff Portal'}
+          </p>
         </div>
       </div>
 

@@ -16,6 +16,7 @@ import { saveClientPricing, updatePayment } from '../../services/db';
 import { useAuthStore } from '../../stores/authStore';
 import { useDivisionStore } from '../../stores/divisionStore';
 import { getClientOutstanding, getClientMetrics } from '../../lib/billing';
+import RecordPaymentModal from '../../components/payments/RecordPaymentModal';
 type Tab = 'general' | 'pricing' | 'orders' | 'ledger' | 'payments';
 
 const methodIcon: Record<PaymentMethod, React.ElementType> = {
@@ -30,7 +31,7 @@ const TABS: { id: Tab; label: string; icon: React.ElementType; adminOnly?: boole
   { id: 'pricing', label: 'Product Pricing', icon: Tags, adminOnly: true },
   { id: 'orders', label: 'Order History', icon: ShoppingCart },
   { id: 'ledger', label: 'Ledger', icon: BookOpen, adminOnly: true },
-  { id: 'payments', label: 'Payments', icon: CreditCard, adminOnly: true },
+  { id: 'payments', label: 'Payments', icon: CreditCard },
 ];
 
 export default function ClientDetailPage() {
@@ -53,6 +54,7 @@ export default function ClientDetailPage() {
   const [editMethod, setEditMethod] = useState<PaymentMethod>('cash');
   const [editReference, setEditReference] = useState('');
   const [editNotes, setEditNotes] = useState('');
+  const [recordPaymentOpen, setRecordPaymentOpen] = useState(false);
 
   const { user } = useAuthStore();
   const isAdmin = user?.role === 'admin';
@@ -552,8 +554,11 @@ export default function ClientDetailPage() {
             </Card>
           </div>
           <Card padding={false} className="overflow-hidden">
-            <div className="px-6 py-5 border-b border-gray-100 dark:border-white/[0.05] bg-gray-50/50 dark:bg-black/10 flex gap-4 items-center">
-              <h2 className="text-base font-semibold text-[var(--color-text-main)] flex-1">Payment History</h2>
+            <div className="px-6 py-5 border-b border-gray-100 dark:border-white/[0.05] bg-gray-50/50 dark:bg-black/10 flex gap-4 items-center justify-between">
+              <h2 className="text-base font-semibold text-[var(--color-text-main)]">Payment History</h2>
+              <Button size="sm" onClick={() => setRecordPaymentOpen(true)}>
+                Record Payment
+              </Button>
             </div>
             {clientPayments.length > 0 ? (
               <div className="overflow-x-auto">
@@ -583,19 +588,21 @@ export default function ClientDetailPage() {
                           <td className="px-6 py-4"><span className="text-sm font-semibold text-[var(--color-text-main)]">{formatCurrency(p.amount)}</span></td>
                           <td className="px-6 py-4"><span className="text-xs font-medium text-gray-500">{format(new Date(p.createdAt), 'MMM d, yyyy h:mm a')}</span></td>
                           <td className="px-6 py-4">
-                            <Button 
-                              variant="outline" 
-                              size="sm"
-                              onClick={() => {
-                                setEditingPayment(p);
-                                setEditAmount(p.amount.toString());
-                                setEditMethod(p.method);
-                                setEditReference(p.reference || '');
-                                setEditNotes(p.notes || '');
-                              }}
-                            >
-                              Edit
-                            </Button>
+                            {isAdmin && (
+                              <Button 
+                                variant="outline" 
+                                size="sm"
+                                onClick={() => {
+                                  setEditingPayment(p);
+                                  setEditAmount(p.amount.toString());
+                                  setEditMethod(p.method);
+                                  setEditReference(p.reference || '');
+                                  setEditNotes(p.notes || '');
+                                }}
+                              >
+                                Edit
+                              </Button>
+                            )}
                           </td>
                         </tr>
                       );
@@ -667,6 +674,13 @@ export default function ClientDetailPage() {
           </div>
         </div>
       )}
+
+      {/* Record Payment Modal */}
+      <RecordPaymentModal
+        isOpen={recordPaymentOpen}
+        onClose={() => setRecordPaymentOpen(false)}
+        client={client}
+      />
     </div>
   );
 }

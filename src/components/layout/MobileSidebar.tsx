@@ -1,32 +1,43 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Package, ShoppingCart,
-  BarChart3, Settings, X, BookOpen, ChevronRight, Receipt, Trash2, LogOut
+  BarChart3, Settings, X, BookOpen, ChevronRight, Receipt, Trash2, LogOut, CreditCard
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useUIStore } from '../../stores/uiStore';
 import { useAuthStore } from '../../stores/authStore';
 import { Avatar } from '../ui';
 
-interface NavItem { label: string; href: string; icon: React.ElementType; adminOnly?: boolean; }
+interface NavItem {
+  label: string;
+  href: string;
+  icon: React.ElementType;
+}
 
-const navItems: NavItem[] = [
+const adminNavItems: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { label: 'Orders', href: '/orders', icon: ShoppingCart, adminOnly: true },
-  { label: 'Clients', href: '/clients', icon: Users, adminOnly: true },
-  { label: 'Products', href: '/products', icon: Package, adminOnly: true },
+  { label: 'Orders', href: '/orders', icon: ShoppingCart },
+  { label: 'Clients', href: '/clients', icon: Users },
+  { label: 'Payments', href: '/payments', icon: CreditCard },
+  { label: 'Products', href: '/products', icon: Package },
   { label: 'Daily Bill', href: '/billing', icon: Receipt },
-  { label: 'Client Ledger', href: '/ledger', icon: BookOpen, adminOnly: true },
-  { label: 'Reports', href: '/reports', icon: BarChart3, adminOnly: true },
-  { label: 'Settings', href: '/settings', icon: Settings, adminOnly: true },
-  { label: 'Trash', href: '/trash', icon: Trash2, adminOnly: true },
+  { label: 'Client Ledger', href: '/ledger', icon: BookOpen },
+  { label: 'Reports', href: '/reports', icon: BarChart3 },
+  { label: 'Settings', href: '/settings', icon: Settings },
+  { label: 'Trash', href: '/trash', icon: Trash2 },
+];
+
+const staffNavItems: NavItem[] = [
+  { label: 'Clients', href: '/clients', icon: Users },
+  { label: 'Orders', href: '/orders', icon: ShoppingCart },
+  { label: 'Payments / Collection', href: '/payments', icon: CreditCard },
 ];
 
 export default function MobileSidebar() {
   const { sidebarOpen, setSidebarOpen } = useUIStore();
   const { user } = useAuthStore();
   const isAdmin = user?.role === 'admin';
-  const visible = navItems.filter(i => !i.adminOnly || isAdmin);
+  const visible = isAdmin ? adminNavItems : staffNavItems;
 
   return (
     <>
@@ -62,7 +73,9 @@ export default function MobileSidebar() {
             </div>
             <div>
               <p className="text-sm font-extrabold text-[var(--color-text-main)] leading-tight">Daily Fresh</p>
-              <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">Billing System</p>
+              <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">
+                {isAdmin ? 'Billing System' : 'Staff Portal'}
+              </p>
             </div>
           </div>
           <button
