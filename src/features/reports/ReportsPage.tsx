@@ -38,6 +38,7 @@ export default function ReportsPage() {
 
     let rev = 0;
     let totalCollected = 0;
+    let totalOpeningBalance = 0;
     const map = new Map<string, { name: string, orders: number, revenue: number, thisMonthRev: number, lastMonthRev: number, trend: number }>();
 
     const thisMonth = new Date().getMonth();
@@ -98,10 +99,12 @@ export default function ReportsPage() {
         }
       } else if (l.type === 'payment') {
         totalCollected += (l.amount || 0);
+      } else if (l.type === 'opening_balance') {
+        totalOpeningBalance += (l.amount || 0);
       }
     });
 
-    const outstanding = rev - totalCollected;
+    const outstanding = totalOpeningBalance + rev - totalCollected;
     
     const dailyColl = validPayments
       .filter(p => isToday(new Date(p.billDate || p.createdAt)))

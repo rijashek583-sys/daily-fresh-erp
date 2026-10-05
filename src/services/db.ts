@@ -26,7 +26,7 @@ import { toast } from 'sonner';
 import { useAuthStore } from '../stores/authStore';
 import { getProductDivision } from '../lib/utils';
 import { useDataStore } from '../stores/dataStore';
-import { type Division, type PaymentMethod } from '../types';
+import { type Division, type PaymentMethod, type ClientOpeningBalance } from '../types';
 
 function enforceAdmin() {
   const user = useAuthStore.getState().user;
@@ -87,7 +87,8 @@ export async function verifyAndSyncClientTotals(clientId: string) {
     const validPaymentIds = new Set<string>();
     paymentsSnap.forEach(doc => {
       const data = doc.data();
-      if (data.invoiceId && validOrderIds.has(data.invoiceId)) {
+      // Valid if not tied to an order (general/opening-balance payment) OR tied to an existing valid order
+      if (!data.invoiceId || validOrderIds.has(data.invoiceId)) {
         validPaymentIds.add(doc.id);
       }
     });
@@ -104,8 +105,8 @@ export async function verifyAndSyncClientTotals(clientId: string) {
       }
     });
 
-    const primaryTotals = { totalInvoiced: 0, totalPaid: 0, totalOrders: 0 };
-    const bakeryTotals = { totalInvoiced: 0, totalPaid: 0, totalOrders: 0 };
+    const primaryTotals = { totalInvoiced: 0, totalPaid: 0, totalOrders: 0, openingBalance: 0 };
+    const bakeryTotals = { totalInvoiced: 0, totalPaid: 0, totalOrders: 0, openingBalance: 0 };
 
     // 2. Process Ledger & Delete Orphan Ledger Entries
     ledgerSnap.forEach(doc => {
@@ -131,6 +132,8 @@ export async function verifyAndSyncClientTotals(clientId: string) {
           target.totalOrders += 1;
         } else if (data.type === 'payment') {
           target.totalPaid += (data.amount || 0);
+        } else if (data.type === 'opening_balance') {
+          target.openingBalance += (data.amount || 0);
         }
       }
     });
@@ -140,10 +143,13 @@ export async function verifyAndSyncClientTotals(clientId: string) {
       console.log(`[Integrity] Cleaned up orphans for client ${clientId}`);
     }
 
-    const primaryOutstanding = primaryTotals.totalInvoiced - primaryTotals.totalPaid;
-    const bakeryOutstanding = bakeryTotals.totalInvoiced - bakeryTotals.totalPaid;
+    const primaryOpening = primaryTotals.openingBalance || 0;
+    const bakeryOpening = bakeryTotals.openingBalance || 0;
+    const primaryOutstanding = primaryOpening + primaryTotals.totalInvoiced - primaryTotals.totalPaid;
+    const bakeryOutstanding = bakeryOpening + bakeryTotals.totalInvoiced - bakeryTotals.totalPaid;
     
     // Cross-division totals for fallback
+    const totalOpening = primaryOpening + bakeryOpening;
     const totalInvoiced = primaryTotals.totalInvoiced + bakeryTotals.totalInvoiced;
     const totalPaid = primaryTotals.totalPaid + bakeryTotals.totalPaid;
     const outstanding = primaryOutstanding + bakeryOutstanding;
@@ -157,21 +163,24 @@ export async function verifyAndSyncClientTotals(clientId: string) {
       totalPaid,
       outstanding,
       totalOrders,
+      openingBalanceAmount: totalOpening,
       primaryTotals: {
         totalRevenue: primaryTotals.totalInvoiced,
         totalPaid: primaryTotals.totalPaid,
         outstanding: primaryOutstanding,
         totalOrders: primaryTotals.totalOrders,
+        openingBalance: primaryOpening,
       },
       bakeryTotals: {
         totalRevenue: bakeryTotals.totalInvoiced,
         totalPaid: bakeryTotals.totalPaid,
         outstanding: bakeryOutstanding,
         totalOrders: bakeryTotals.totalOrders,
+        openingBalance: bakeryOpening,
       }
     });
     
-    console.log(`[Integrity] Client ${clientId} synced. Primary Out: ${primaryOutstanding}, Bakery Out: ${bakeryOutstanding}`);
+    console.log(`[Integrity] Client ${clientId} synced. Opening: ${totalOpening}, Primary Out: ${primaryOutstanding}, Bakery Out: ${bakeryOutstanding}`);
   } catch (err) {
     console.error(`[Integrity] Failed to sync client ${clientId}:`, err);
   }
@@ -199,6 +208,101 @@ export async function updateClient(clientId: string, updates: any) {
   } catch (error) {
     console.error("Error updating client:", error);
     toast.error('Failed to update client');
+    throw error;
+  }
+}
+
+export interface ClientOpeningBalanceInput {
+  amount: number;
+  asOfDate: string;
+  notes?: string;
+  division?: Division;
+}
+
+export async function saveClientOpeningBalance(clientId: string, input: ClientOpeningBalanceInput) {
+  enforceAdmin();
+  const currentUser = useAuthStore.getState().user;
+  const adminName = currentUser?.name || currentUser?.displayName || 'Admin';
+
+  try {
+    const clientRef = doc(db, COLLECTIONS.CLIENTS, clientId);
+    const clientSnap = await getDoc(clientRef);
+    if (!clientSnap.exists()) throw new Error('Client not found');
+    const clientData = clientSnap.data();
+
+    const amount = Number(input.amount) || 0;
+    if (amount < 0) throw new Error('Opening balance amount cannot be negative');
+
+    const asOfDate = input.asOfDate || new Date().toISOString().split('T')[0];
+    const notes = input.notes?.trim() || '';
+    const division: Division = input.division === 'bakery' ? 'bakery' : 'primary';
+
+    // Find any existing opening_balance ledger entries for this client
+    const ledgerQuery = query(
+      collection(db, 'ledger'),
+      where('clientId', '==', clientId),
+      where('type', '==', 'opening_balance')
+    );
+    const ledgerSnap = await getDocs(ledgerQuery);
+
+    const batch = writeBatch(db);
+
+    if (amount > 0) {
+      const ledgerDocRef = ledgerSnap.empty
+        ? doc(collection(db, 'ledger'))
+        : ledgerSnap.docs[0].ref;
+
+      // Remove any duplicate opening_balance entries if present
+      if (ledgerSnap.docs.length > 1) {
+        for (let i = 1; i < ledgerSnap.docs.length; i++) {
+          batch.delete(ledgerSnap.docs[i].ref);
+        }
+      }
+
+      const ledgerData: any = {
+        id: ledgerDocRef.id,
+        type: 'opening_balance',
+        clientId,
+        clientName: clientData.name || '',
+        region: clientData.region || '',
+        amount,
+        billDate: asOfDate,
+        createdAt: `${asOfDate}T00:00:00.000Z`,
+        description: notes ? `Opening Balance - ${notes}` : 'Opening Balance',
+        division,
+        updatedBy: adminName,
+      };
+      batch.set(ledgerDocRef, ledgerData);
+
+      const openingRecord: ClientOpeningBalance = {
+        amount,
+        asOfDate,
+        notes,
+        division,
+        updatedAt: new Date().toISOString(),
+        updatedBy: adminName,
+      };
+
+      batch.update(clientRef, {
+        openingBalance: openingRecord,
+        openingBalanceAmount: amount,
+      });
+    } else {
+      // If amount is 0, delete existing opening balance ledger entries
+      ledgerSnap.forEach(d => batch.delete(d.ref));
+      batch.update(clientRef, {
+        openingBalance: null,
+        openingBalanceAmount: 0,
+      });
+    }
+
+    await batch.commit();
+
+    await verifyAndSyncClientTotals(clientId);
+    toast.success('Opening balance updated successfully');
+  } catch (error: any) {
+    console.error('Error saving opening balance:', error);
+    toast.error(error.message || 'Failed to update opening balance');
     throw error;
   }
 }

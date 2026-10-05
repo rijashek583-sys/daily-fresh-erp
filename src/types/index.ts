@@ -17,11 +17,21 @@ export interface User {
   createdAt: string;
 }
 
+export interface ClientOpeningBalance {
+  amount: number;
+  asOfDate: string;
+  notes?: string;
+  division?: Division;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
 export interface ClientTotals {
   totalOrders: number;
   totalRevenue: number;
   totalPaid: number;
   outstanding: number;
+  openingBalance?: number;
 }
 
 export interface Client {
@@ -38,6 +48,8 @@ export interface Client {
   totalRevenue: number;
   totalPaid?: number;
   outstanding: number;
+  openingBalance?: ClientOpeningBalance | null;
+  openingBalanceAmount?: number;
   primaryTotals?: ClientTotals;
   bakeryTotals?: ClientTotals;
   joinedAt?: string;
@@ -129,7 +141,7 @@ export interface Payment {
 
 export interface LedgerTransaction {
   id: string;
-  type: 'payment' | 'invoice';
+  type: 'payment' | 'invoice' | 'opening_balance';
   paymentId?: string;
   clientId: string;
   clientName?: string;

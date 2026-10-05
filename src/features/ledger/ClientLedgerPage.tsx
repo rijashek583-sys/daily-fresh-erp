@@ -11,7 +11,7 @@ interface LedgerEntry {
   id: string;
   date: string;
   displayDate: string;
-  type: 'invoice' | 'payment';
+  type: 'invoice' | 'payment' | 'opening_balance';
   description: string;
   debit: number;
   credit: number;
@@ -78,14 +78,18 @@ export default function ClientLedgerPage() {
       const rawDate = l.paymentDate || l.billDate || l.createdAt;
       const parsedDate = new Date(rawDate.length === 10 ? `${rawDate}T12:00:00` : rawDate);
       
+      const isInvoice = l.type === 'invoice';
+      const isOpening = l.type === 'opening_balance';
+      const isPayment = l.type === 'payment';
+
       return {
         id: l.id,
         date: rawDate,
-        displayDate: format(parsedDate, l.type === 'invoice' ? 'MMM d, yyyy' : 'MMM d, yyyy h:mm a'),
+        displayDate: format(parsedDate, (isInvoice || isOpening) ? 'MMM d, yyyy' : 'MMM d, yyyy h:mm a'),
         type: l.type,
-        description: l.description || (l.type === 'payment' ? `Payment received (${l.paymentMethod?.replace('_', ' ')})` : 'Daily Bill'),
-        debit: l.type === 'invoice' ? l.amount : 0,
-        credit: l.type === 'payment' ? l.amount : 0,
+        description: l.description || (isOpening ? 'Opening Balance' : isPayment ? `Payment received (${l.paymentMethod?.replace('_', ' ')})` : 'Daily Bill'),
+        debit: (isInvoice || isOpening) ? (l.amount || 0) : 0,
+        credit: isPayment ? (l.amount || 0) : 0,
       };
     });
 
@@ -250,11 +254,11 @@ export default function ClientLedgerPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-50 dark:divide-gray-800/40">
                   {ledgerEntries.length > 0 ? ledgerEntries.map(entry => (
-                    <tr key={entry.id} className={`transition-colors hover:bg-gray-50/80 dark:hover:bg-gray-800/30 ${entry.type === 'invoice' ? '' : 'bg-[var(--color-success-bg)]/[0.3] dark:bg-[var(--color-success)]/[0.05]'}`}>
+                    <tr key={entry.id} className={`transition-colors hover:bg-gray-50/80 dark:hover:bg-gray-800/30 ${entry.type === 'invoice' ? '' : entry.type === 'opening_balance' ? 'bg-purple-50/20 dark:bg-purple-950/10' : 'bg-[var(--color-success-bg)]/[0.3] dark:bg-[var(--color-success)]/[0.05]'}`}>
                       <td className="px-6 py-4 text-xs font-medium text-gray-500 whitespace-nowrap">{entry.displayDate}</td>
                       <td className="px-6 py-4">
-                        <Badge variant={entry.type === 'invoice' ? 'info' : 'success'}>
-                          {entry.type === 'invoice' ? 'Invoice' : 'Payment'}
+                        <Badge variant={entry.type === 'invoice' ? 'info' : entry.type === 'opening_balance' ? 'purple' : 'success'}>
+                          {entry.type === 'invoice' ? 'Invoice' : entry.type === 'opening_balance' ? 'Opening Balance' : 'Payment'}
                         </Badge>
                       </td>
                       <td className="px-6 py-4">

@@ -4,7 +4,7 @@ import {
   ArrowLeft, FileText, CheckCircle2, TrendingUp, TrendingDown, 
   Package, Calendar, UserPlus, CreditCard, Check, Clock, Edit3, X,
   Banknote, Smartphone, Building, ShoppingCart, Tags, Search, Save,
-  Download, BookOpen
+  Download, BookOpen, Wallet
 } from 'lucide-react';
 import { type PaymentMethod } from '../../types';
 import { useDataStore } from '../../stores/dataStore';
@@ -17,6 +17,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { useDivisionStore } from '../../stores/divisionStore';
 import { getClientOutstanding, getClientMetrics } from '../../lib/billing';
 import RecordPaymentModal from '../../components/payments/RecordPaymentModal';
+import OpeningBalanceModal from '../../components/clients/OpeningBalanceModal';
 type Tab = 'general' | 'pricing' | 'orders' | 'ledger' | 'payments';
 
 const methodIcon: Record<PaymentMethod, React.ElementType> = {
@@ -55,6 +56,7 @@ export default function ClientDetailPage() {
   const [editReference, setEditReference] = useState('');
   const [editNotes, setEditNotes] = useState('');
   const [recordPaymentOpen, setRecordPaymentOpen] = useState(false);
+  const [openingBalanceModalOpen, setOpeningBalanceModalOpen] = useState(false);
 
   const { user } = useAuthStore();
   const isAdmin = user?.role === 'admin';
@@ -93,14 +95,18 @@ export default function ClientDetailPage() {
     const entries: any[] = clientLedger.map(l => {
       const rawDate = l.paymentDate || l.billDate || l.createdAt;
       const parsedDate = new Date(rawDate.length === 10 ? `${rawDate}T12:00:00` : rawDate);
+      const isInvoice = l.type === 'invoice';
+      const isOpening = l.type === 'opening_balance';
+      const isPayment = l.type === 'payment';
+
       return {
         id: l.id,
         date: rawDate,
-        displayDate: format(parsedDate, l.type === 'invoice' ? 'MMM d, yyyy' : 'MMM d, yyyy h:mm a'),
+        displayDate: format(parsedDate, (isInvoice || isOpening) ? 'MMM d, yyyy' : 'MMM d, yyyy h:mm a'),
         type: l.type,
-        description: l.description || (l.type === 'payment' ? `Payment received (${l.paymentMethod?.replace('_', ' ')})` : 'Daily Bill'),
-        debit: l.type === 'invoice' ? l.amount : 0,
-        credit: l.type === 'payment' ? l.amount : 0,
+        description: l.description || (isOpening ? 'Opening Balance' : isPayment ? `Payment received (${l.paymentMethod?.replace('_', ' ')})` : 'Daily Bill'),
+        debit: (isInvoice || isOpening) ? (l.amount || 0) : 0,
+        credit: isPayment ? (l.amount || 0) : 0,
       };
     });
 
@@ -168,6 +174,7 @@ export default function ClientDetailPage() {
   const metrics = getClientMetrics(client.id, activeDivision);
   const totalDebit = metrics.totalInvoiced;
   const totalCredit = metrics.totalPaid;
+  const openingBal = metrics.openingBalance || 0;
   const balance = metrics.outstanding;
 
   // --- Payments Tab ---
@@ -233,7 +240,17 @@ export default function ClientDetailPage() {
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
+          {isAdmin && (
+            <Button
+              variant="outline"
+              size="sm"
+              icon={<Wallet className="w-4 h-4 text-[var(--color-primary)]" />}
+              onClick={() => setOpeningBalanceModalOpen(true)}
+            >
+              Opening Balance
+            </Button>
+          )}
           <StatusSelect
             value={client.status}
             onChange={() => {}}
@@ -289,6 +306,45 @@ export default function ClientDetailPage() {
               ))}
             </div>
           </Card>
+
+          {/* Opening Balance Card */}
+          <Card className="border border-gray-100 dark:border-white/[0.05]">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-start gap-3.5">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+                  <Wallet className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-[var(--color-text-main)]">Opening Balance</h3>
+                  {client.openingBalance && client.openingBalance.amount > 0 ? (
+                    <div className="mt-1 space-y-0.5">
+                      <p className="text-xl font-extrabold text-amber-600 dark:text-amber-400 tabular-nums">
+                        {formatCurrency(client.openingBalance.amount)}
+                      </p>
+                      <p className="text-xs text-[var(--color-text-muted)]">
+                        As of <span className="font-semibold text-[var(--color-text-main)]">{format(new Date(client.openingBalance.asOfDate), 'dd MMM yyyy')}</span>
+                        {client.openingBalance.notes ? ` · "${client.openingBalance.notes}"` : ''}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
+                      No opening balance configured. Initial balance starts at ₹0.
+                    </p>
+                  )}
+                </div>
+              </div>
+              {isAdmin && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setOpeningBalanceModalOpen(true)}
+                >
+                  {client.openingBalance && client.openingBalance.amount > 0 ? 'Edit Opening Balance' : 'Set Opening Balance'}
+                </Button>
+              )}
+            </div>
+          </Card>
+
           <div className="grid grid-cols-3 gap-4">
             <Card className="text-center">
               <p className="text-3xl font-extrabold text-[var(--color-text-main)]">{clientOrders.length}</p>
@@ -445,32 +501,41 @@ export default function ClientDetailPage() {
       {/* ─── TAB: LEDGER ─── */}
       {activeTab === 'ledger' && (
         <div className="animate-in fade-in slide-in-from-bottom-4 duration-300 space-y-6">
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <Card className="flex flex-col justify-between">
+              <div className="flex items-center gap-2 mb-4">
+                <div className="w-8 h-8 rounded-full bg-amber-500/10 flex items-center justify-center">
+                  <Wallet className="w-4 h-4 text-amber-600" />
+                </div>
+                <p className="text-xs font-bold text-[var(--color-text-muted)]">Opening Balance</p>
+              </div>
+              <p className="text-xl font-semibold text-amber-600 tracking-tight">{formatCurrency(openingBal)}</p>
+            </Card>
             <Card className="flex flex-col justify-between">
               <div className="flex items-center gap-2 mb-4">
                 <div className="w-8 h-8 rounded-full bg-[var(--color-primary)]/10 flex items-center justify-center">
                   <TrendingUp className="w-4 h-4 text-[var(--color-primary)]" />
                 </div>
-                <p className="text-sm font-bold text-[var(--color-text-muted)]">Total Invoiced</p>
+                <p className="text-xs font-bold text-[var(--color-text-muted)]">Total Invoiced</p>
               </div>
-              <p className="text-2xl font-semibold text-[var(--color-text-main)] tracking-tight">{formatCurrency(totalDebit)}</p>
+              <p className="text-xl font-semibold text-[var(--color-text-main)] tracking-tight">{formatCurrency(totalDebit)}</p>
             </Card>
             <Card className="flex flex-col justify-between">
               <div className="flex items-center gap-2 mb-4">
                 <div className="w-8 h-8 rounded-full bg-[var(--color-success-bg)] flex items-center justify-center">
                   <TrendingDown className="w-4 h-4 text-[var(--color-success)]" />
                 </div>
-                <p className="text-sm font-bold text-[var(--color-text-muted)]">Total Paid</p>
+                <p className="text-xs font-bold text-[var(--color-text-muted)]">Total Paid</p>
               </div>
-              <p className="text-2xl font-semibold text-[var(--color-success)] tracking-tight">{formatCurrency(totalCredit)}</p>
+              <p className="text-xl font-semibold text-[var(--color-success)] tracking-tight">{formatCurrency(totalCredit)}</p>
             </Card>
             <Card className="flex flex-col justify-between relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-[var(--color-primary)]/5 rounded-full blur-2xl -translate-y-1/2 translate-x-1/3" />
               <div className="flex items-center gap-2 mb-4 relative">
-                <p className="text-sm font-bold text-[var(--color-text-muted)]">Outstanding Balance</p>
+                <p className="text-xs font-bold text-[var(--color-text-muted)]">Outstanding Balance</p>
               </div>
               <div className="relative">
-                <p className={`text-3xl font-semibold tracking-tight ${balance > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-[var(--color-success)]'}`}>
+                <p className={`text-2xl font-semibold tracking-tight ${balance > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-[var(--color-success)]'}`}>
                   {formatCurrency(Math.abs(balance))}
                 </p>
                 <Badge variant={balance > 0 ? 'warning' : 'success'} className="mt-2 relative z-10">
@@ -499,9 +564,13 @@ export default function ClientDetailPage() {
                   </thead>
                   <tbody className="divide-y divide-gray-50 dark:divide-gray-800/40">
                     {ledgerEntries.map(entry => (
-                      <tr key={entry.id} className="transition-colors hover:bg-gray-50/80 dark:hover:bg-gray-800/30">
+                      <tr key={entry.id} className={`transition-colors hover:bg-gray-50/80 dark:hover:bg-gray-800/30 ${entry.type === 'invoice' ? '' : entry.type === 'opening_balance' ? 'bg-purple-50/20 dark:bg-purple-950/10' : ''}`}>
                         <td className="px-6 py-4 text-xs font-medium text-gray-500 whitespace-nowrap">{entry.displayDate}</td>
-                        <td className="px-6 py-4"><Badge variant={entry.type === 'invoice' ? 'info' : 'success'}>{entry.type === 'invoice' ? 'Invoice' : 'Payment'}</Badge></td>
+                        <td className="px-6 py-4">
+                          <Badge variant={entry.type === 'invoice' ? 'info' : entry.type === 'opening_balance' ? 'purple' : 'success'}>
+                            {entry.type === 'invoice' ? 'Invoice' : entry.type === 'opening_balance' ? 'Opening Balance' : 'Payment'}
+                          </Badge>
+                        </td>
                         <td className="px-6 py-4"><p className="text-sm font-medium text-[var(--color-text-main)] max-w-[200px] truncate">{entry.description}</p></td>
                         <td className="px-6 py-4 text-right">{entry.debit > 0 ? <span className="text-sm font-semibold text-[var(--color-text-main)]">{formatCurrency(entry.debit)}</span> : <span className="text-gray-300 dark:text-gray-700">—</span>}</td>
                         <td className="px-6 py-4 text-right">{entry.credit > 0 ? <span className="text-sm font-semibold text-[var(--color-success)]">{formatCurrency(entry.credit)}</span> : <span className="text-gray-300 dark:text-gray-700">—</span>}</td>
@@ -679,6 +748,13 @@ export default function ClientDetailPage() {
       <RecordPaymentModal
         isOpen={recordPaymentOpen}
         onClose={() => setRecordPaymentOpen(false)}
+        client={client}
+      />
+
+      {/* Opening Balance Modal */}
+      <OpeningBalanceModal
+        isOpen={openingBalanceModalOpen}
+        onClose={() => setOpeningBalanceModalOpen(false)}
         client={client}
       />
     </div>

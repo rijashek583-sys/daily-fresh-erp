@@ -23,14 +23,22 @@ export function calculateOldBalance(clientId: string, deliveryDate: string, divi
     if (l.invoiceId && excludeInvoiceIds.includes(l.invoiceId)) return false;
 
     // Filter out future entries based on deliveryDate.
-    // Use the logical date: billDate for invoices, paymentDate for payments.
+    // Use the logical date: billDate for invoices/opening_balance, paymentDate for payments.
     const txDate = (l.billDate || l.paymentDate || l.createdAt).substring(0, 10);
+    // Opening balance represents balance prior to orders on or after that date
+    if (l.type === 'opening_balance') {
+      return txDate <= deliveryDate;
+    }
     return txDate < deliveryDate;
   });
 
-  const totalDebits = previousEntries.filter(l => l.type === 'invoice').reduce((sum, l) => sum + (l.amount || 0), 0);
+  const totalDebits = previousEntries
+    .filter(l => l.type === 'invoice' || l.type === 'opening_balance')
+    .reduce((sum, l) => sum + (l.amount || 0), 0);
   
-  const totalCredits = previousEntries.filter(l => l.type === 'payment').reduce((sum, l) => sum + (l.amount || 0), 0);
+  const totalCredits = previousEntries
+    .filter(l => l.type === 'payment')
+    .reduce((sum, l) => sum + (l.amount || 0), 0);
 
   return totalDebits - totalCredits;
 }
@@ -48,7 +56,7 @@ export function calculatePaymentsOnDate(clientId: string, date: string, division
 }
 
 export function getClientMetrics(clientId: string, division: FilterDivision) {
-  const { ledger, orders, payments } = useDataStore.getState();
+  const { ledger, orders, payments, clients } = useDataStore.getState();
   
   const clientLedger = ledger.filter(l => {
     if (l.clientId !== clientId) return false;
@@ -60,19 +68,33 @@ export function getClientMetrics(clientId: string, division: FilterDivision) {
   });
 
   if (clientLedger.length > 0) {
+    const openingBalance = clientLedger.filter(l => l.type === 'opening_balance').reduce((sum, l) => sum + (l.amount || 0), 0);
     const totalInvoiced = clientLedger.filter(l => l.type === 'invoice').reduce((sum, l) => sum + (l.amount || 0), 0);
     const totalPaid = clientLedger.filter(l => l.type === 'payment').reduce((sum, l) => sum + (l.amount || 0), 0);
     const totalOrders = clientLedger.filter(l => l.type === 'invoice').length;
 
     return {
+      openingBalance,
       totalInvoiced,
       totalPaid,
-      outstanding: totalInvoiced - totalPaid,
+      outstanding: (openingBalance + totalInvoiced) - totalPaid,
       totalOrders
     };
   }
 
   // Fallback if ledger entries are not yet populated for this client:
+  const client = clients?.find(c => c.id === clientId);
+  let openingBalance = 0;
+  if (client) {
+    if (division === 'bakery') {
+      openingBalance = client.bakeryTotals?.openingBalance || (client.openingBalance?.division === 'bakery' ? client.openingBalance.amount : 0);
+    } else if (division === 'primary') {
+      openingBalance = client.primaryTotals?.openingBalance || (client.openingBalance?.division !== 'bakery' ? (client.openingBalance?.amount || client.openingBalanceAmount || 0) : 0);
+    } else {
+      openingBalance = client.openingBalance?.amount ?? client.openingBalanceAmount ?? 0;
+    }
+  }
+
   const clientOrders = orders.filter(o => {
     if (o.clientId !== clientId) return false;
     if (division !== 'all') {
@@ -92,9 +114,10 @@ export function getClientMetrics(clientId: string, division: FilterDivision) {
   const totalPaid = clientPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
 
   return {
+    openingBalance,
     totalInvoiced,
     totalPaid,
-    outstanding: totalInvoiced - totalPaid,
+    outstanding: (openingBalance + totalInvoiced) - totalPaid,
     totalOrders: clientOrders.length
   };
 }
