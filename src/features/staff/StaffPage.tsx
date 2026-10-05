@@ -45,6 +45,7 @@ export default function StaffPage() {
   // Filters
   const [selectedStaffFilter, setSelectedStaffFilter] = useState<string>('all');
   const [selectedRegionFilter, setSelectedRegionFilter] = useState<string>('all');
+  const [selectedTypeFilter, setSelectedTypeFilter] = useState<'all' | 'client' | 'direct'>('all');
   const [search, setSearch] = useState<string>('');
   const [dateFilter, setDateFilter] = useState<string>('');
 
@@ -112,6 +113,7 @@ export default function StaffPage() {
 
   // Helper to resolve client region
   const getPaymentRegion = (p: Payment): string => {
+    if (p.orderType === 'direct' || p.clientId === 'direct') return 'Direct Sale / —';
     if (p.region) return p.region;
     const c = clientMap.get(p.clientId);
     return c?.region || '—';
@@ -119,6 +121,7 @@ export default function StaffPage() {
 
   // Helper to resolve client name
   const getPaymentClientName = (p: Payment): string => {
+    if (p.orderType === 'direct' || p.clientId === 'direct') return 'Direct Sale';
     if (p.clientName) return p.clientName;
     const c = clientMap.get(p.clientId);
     return c?.name || '—';
@@ -164,7 +167,7 @@ export default function StaffPage() {
       if (c.region && !c.deletedAt) set.add(c.region);
     });
     validPayments.forEach((p) => {
-      if (p.region) set.add(p.region);
+      if (p.region && p.region !== 'Direct Sale') set.add(p.region);
     });
     return Array.from(set).sort();
   }, [clients, validPayments]);
@@ -178,6 +181,13 @@ export default function StaffPage() {
         const clientName = getPaymentClientName(p);
         const region = getPaymentRegion(p);
         const pDateInfo = getPaymentDate(p);
+
+        // Order type filter
+        if (selectedTypeFilter !== 'all') {
+          const isDirect = p.orderType === 'direct' || p.clientId === 'direct';
+          if (selectedTypeFilter === 'direct' && !isDirect) return false;
+          if (selectedTypeFilter === 'client' && isDirect) return false;
+        }
 
         // Staff filter
         if (selectedStaffFilter !== 'all') {
@@ -202,7 +212,9 @@ export default function StaffPage() {
         // Search text
         if (search.trim()) {
           const q = search.toLowerCase();
+          const isDirect = p.orderType === 'direct' || p.clientId === 'direct';
           const match =
+            (isDirect && 'direct sale'.includes(q)) ||
             staffName.toLowerCase().includes(q) ||
             clientName.toLowerCase().includes(q) ||
             region.toLowerCase().includes(q) ||
@@ -217,6 +229,7 @@ export default function StaffPage() {
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [
     validPayments,
+    selectedTypeFilter,
     selectedStaffFilter,
     selectedRegionFilter,
     dateFilter,
@@ -509,7 +522,7 @@ export default function StaffPage() {
 
           {/* Filter Bar */}
           <Card className="p-4">
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
               {/* Search */}
               <div className="relative">
                 <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -536,6 +549,19 @@ export default function StaffPage() {
                       {s.name}
                     </option>
                   ))}
+                </select>
+              </div>
+
+              {/* Order Type Select */}
+              <div className="relative">
+                <select
+                  value={selectedTypeFilter}
+                  onChange={(e) => setSelectedTypeFilter(e.target.value as 'all' | 'client' | 'direct')}
+                  className="w-full px-3 py-2 text-xs font-medium rounded-xl border border-gray-200 dark:border-gray-800 bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] transition-all appearance-none cursor-pointer"
+                >
+                  <option value="all">All Transactions</option>
+                  <option value="client">Client Orders</option>
+                  <option value="direct">Direct Sales</option>
                 </select>
               </div>
 
@@ -570,6 +596,7 @@ export default function StaffPage() {
 
             {(selectedStaffFilter !== 'all' ||
               selectedRegionFilter !== 'all' ||
+              selectedTypeFilter !== 'all' ||
               dateFilter ||
               search) && (
               <div className="flex items-center justify-between pt-3 mt-3 border-t border-gray-100 dark:border-gray-800 text-xs">
@@ -581,6 +608,7 @@ export default function StaffPage() {
                   onClick={() => {
                     setSelectedStaffFilter('all');
                     setSelectedRegionFilter('all');
+                    setSelectedTypeFilter('all');
                     setDateFilter('');
                     setSearch('');
                   }}
@@ -621,6 +649,7 @@ export default function StaffPage() {
                   <tbody className="divide-y divide-gray-50 dark:divide-gray-800/40">
                     {filteredPayments.map((p) => {
                       const staffName = getPaymentStaffName(p);
+                      const isDirectSale = p.orderType === 'direct' || p.clientId === 'direct';
                       const clientName = getPaymentClientName(p);
                       const region = getPaymentRegion(p);
                       const dateInfo = getPaymentDate(p);
@@ -649,20 +678,35 @@ export default function StaffPage() {
 
                           {/* 2. Which shop/client */}
                           <td className="px-5 py-3.5">
-                            <Link
-                              to={`/clients/${p.clientId}`}
-                              className="font-bold text-xs text-[var(--color-text-main)] hover:text-[var(--color-primary)] transition-colors block"
-                            >
-                              {clientName}
-                            </Link>
-                            <span className="text-[10px] text-gray-400 font-mono">
-                              #{p.id.slice(0, 8)}
-                            </span>
+                            {isDirectSale ? (
+                              <div>
+                                <span className="font-bold text-xs text-amber-700 dark:text-amber-400 block">
+                                  Direct Sale
+                                </span>
+                                <span className="text-[10px] text-gray-400 font-mono">
+                                  #{p.id.slice(0, 8)}
+                                </span>
+                              </div>
+                            ) : (
+                              <>
+                                <Link
+                                  to={`/clients/${p.clientId}`}
+                                  className="font-bold text-xs text-[var(--color-text-main)] hover:text-[var(--color-primary)] transition-colors block"
+                                >
+                                  {clientName}
+                                </Link>
+                                <span className="text-[10px] text-gray-400 font-mono">
+                                  #{p.id.slice(0, 8)}
+                                </span>
+                              </>
+                            )}
                           </td>
 
                           {/* 3. Which region */}
                           <td className="px-4 py-3.5">
-                            <Badge variant="gray">{region || '—'}</Badge>
+                            <Badge variant={isDirectSale ? 'warning' : 'gray'}>
+                              {isDirectSale ? 'Direct Sale / —' : (region || '—')}
+                            </Badge>
                           </td>
 
                           {/* 4. Date */}
@@ -690,6 +734,9 @@ export default function StaffPage() {
                                     {p.division}
                                   </Badge>
                                 )}
+                                {isDirectSale && (
+                                  <Badge variant="warning">Direct Sale</Badge>
+                                )}
                               </div>
 
                               {p.reference && (
@@ -705,7 +752,7 @@ export default function StaffPage() {
 
                               {linkedOrder && (
                                 <p className="text-[10px] font-medium text-gray-400">
-                                  Order bill date:{' '}
+                                  {isDirectSale ? 'Direct Sale total: ' : 'Order bill date: '}
                                   <strong className="text-gray-600 dark:text-gray-300">
                                     {format(new Date(linkedOrder.deliveryDate), 'dd MMM yyyy')}
                                   </strong>{' '}
@@ -715,25 +762,45 @@ export default function StaffPage() {
                             </div>
                           </td>
 
-                          {/* 7. Summary Flow badge: Anil → ABC Shop → Ernakulam → ₹5,000 → 05 Oct */}
+                          {/* 7. Summary Flow badge: Anil → Direct Sale → ₹1,300 → 05 Oct 2026 */}
                           <td className="px-4 py-3.5 text-right whitespace-nowrap">
-                            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-gray-50 dark:bg-gray-800/80 border border-gray-100 dark:border-gray-800 text-[11px] font-semibold text-gray-600 dark:text-gray-300">
-                              <span className="font-bold text-[var(--color-text-main)]">
-                                {staffName}
-                              </span>
-                              <span className="text-gray-300 dark:text-gray-600">&rarr;</span>
-                              <span className="truncate max-w-[100px]">{clientName}</span>
-                              <span className="text-gray-300 dark:text-gray-600">&rarr;</span>
-                              <span className="text-gray-400">{region}</span>
-                              <span className="text-gray-300 dark:text-gray-600">&rarr;</span>
-                              <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                                {formatCurrency(p.amount)}
-                              </span>
-                              <span className="text-gray-300 dark:text-gray-600">&rarr;</span>
-                              <span className="text-gray-500">
-                                {dateInfo.display.replace(/\s\d{4}$/, '')}
-                              </span>
-                            </div>
+                            {isDirectSale ? (
+                              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[11px] font-semibold text-amber-900 dark:text-amber-200">
+                                <span className="font-bold text-[var(--color-text-main)]">
+                                  {staffName}
+                                </span>
+                                <span className="text-gray-300 dark:text-gray-600">&rarr;</span>
+                                <span className="font-bold text-amber-700 dark:text-amber-400">
+                                  Direct Sale
+                                </span>
+                                <span className="text-gray-300 dark:text-gray-600">&rarr;</span>
+                                <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                                  {formatCurrency(p.amount)}
+                                </span>
+                                <span className="text-gray-300 dark:text-gray-600">&rarr;</span>
+                                <span className="text-gray-500">
+                                  {dateInfo.display}
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-gray-50 dark:bg-gray-800/80 border border-gray-100 dark:border-gray-800 text-[11px] font-semibold text-gray-600 dark:text-gray-300">
+                                <span className="font-bold text-[var(--color-text-main)]">
+                                  {staffName}
+                                </span>
+                                <span className="text-gray-300 dark:text-gray-600">&rarr;</span>
+                                <span className="truncate max-w-[100px]">{clientName}</span>
+                                <span className="text-gray-300 dark:text-gray-600">&rarr;</span>
+                                <span className="text-gray-400">{region}</span>
+                                <span className="text-gray-300 dark:text-gray-600">&rarr;</span>
+                                <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                                  {formatCurrency(p.amount)}
+                                </span>
+                                <span className="text-gray-300 dark:text-gray-600">&rarr;</span>
+                                <span className="text-gray-500">
+                                  {dateInfo.display.replace(/\s\d{4}$/, '')}
+                                </span>
+                              </div>
+                            )}
                           </td>
                         </tr>
                       );

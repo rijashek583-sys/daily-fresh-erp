@@ -83,26 +83,38 @@ export default function DailyBillingPage() {
     
     if (filterRegion) {
       const regionClientIds = new Set(clients.filter(c => c.region === filterRegion).map(c => c.id));
-      dayOrders = dayOrders.filter(o => regionClientIds.has(o.clientId));
+      dayOrders = dayOrders.filter(o => {
+        if (o.orderType === 'direct' || o.clientId === 'direct') {
+          return filterRegion === 'Direct Sale';
+        }
+        return regionClientIds.has(o.clientId);
+      });
     }
     if (filterClientId) {
       dayOrders = dayOrders.filter(o => o.clientId === filterClientId);
     }
     if (search) {
       const s = search.toLowerCase();
-      dayOrders = dayOrders.filter(o => o.clientName.toLowerCase().includes(s));
+      dayOrders = dayOrders.filter(o => {
+        const isDirect = o.orderType === 'direct' || o.clientId === 'direct';
+        return (isDirect && 'direct sale'.includes(s)) || o.clientName.toLowerCase().includes(s);
+      });
     }
 
     const grouped = new Map<string, typeof dayOrders>();
     dayOrders.forEach(o => {
-      if (!grouped.has(o.clientId)) grouped.set(o.clientId, []);
-      grouped.get(o.clientId)!.push(o);
+      const isDirect = o.orderType === 'direct' || o.clientId === 'direct';
+      const key = isDirect ? `direct_${o.id}` : o.clientId;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key)!.push(o);
     });
 
     const rows: DailyBillRow[] = [];
-    grouped.forEach((clientOrders, clientId) => {
-      const clientName = clientOrders[0].clientName;
-      const region = clients.find(c => c.id === clientId)?.region || '-';
+    grouped.forEach((clientOrders, groupKey) => {
+      const isDirect = groupKey.startsWith('direct_') || clientOrders[0].orderType === 'direct' || clientOrders[0].clientId === 'direct';
+      const clientId = isDirect ? 'direct' : clientOrders[0].clientId;
+      const clientName = isDirect ? 'Direct Sale' : clientOrders[0].clientName;
+      const region = isDirect ? 'Direct Sale / —' : (clients.find(c => c.id === clientId)?.region || '-');
       
       const itemsMap = new Map<string, { qty: number, unitPrice: number, total: number, division: string }>();
       clientOrders.forEach(o => {
@@ -131,20 +143,33 @@ export default function DailyBillingPage() {
       const primarySubtotal = primaryItems.reduce((s, i) => s + i.total, 0);
       const bakerySubtotal  = bakeryItems.reduce((s, i) => s + i.total, 0);
 
-      const primaryOldBalance = activeDivision === 'bakery' ? 0 : calculateOldBalance(clientId, filterDate, 'primary', currentInvoiceIds);
-      const bakeryOldBalance  = activeDivision === 'primary' ? 0 : calculateOldBalance(clientId, filterDate, 'bakery',  currentInvoiceIds);
-      const primaryPaid = activeDivision === 'bakery' ? 0 : calculatePaymentsOnDate(clientId, filterDate, 'primary');
-      const bakeryPaid  = activeDivision === 'primary' ? 0 : calculatePaymentsOnDate(clientId, filterDate, 'bakery');
+      let primaryOldBalance = 0;
+      let bakeryOldBalance = 0;
+      let primaryPaid = 0;
+      let bakeryPaid = 0;
 
-      const primaryOutstanding = (primarySubtotal + primaryOldBalance) - primaryPaid;
-      const bakeryOutstanding  = (bakerySubtotal  + bakeryOldBalance)  - bakeryPaid;
+      if (!isDirect) {
+        primaryOldBalance = activeDivision === 'bakery' ? 0 : calculateOldBalance(clientId, filterDate, 'primary', currentInvoiceIds);
+        bakeryOldBalance  = activeDivision === 'primary' ? 0 : calculateOldBalance(clientId, filterDate, 'bakery',  currentInvoiceIds);
+        primaryPaid = activeDivision === 'bakery' ? 0 : calculatePaymentsOnDate(clientId, filterDate, 'primary');
+        bakeryPaid  = activeDivision === 'primary' ? 0 : calculatePaymentsOnDate(clientId, filterDate, 'bakery');
+      } else {
+        // Direct sales have no old balance. Payments are read from order invoiceId.
+        const { payments } = useDataStore.getState();
+        const orderPayments = payments.filter(p => !p.deletedAt && p.invoiceId === clientOrders[0].id);
+        primaryPaid = orderPayments.filter(p => p.division === 'primary').reduce((s, p) => s + (p.amount || 0), 0);
+        bakeryPaid = orderPayments.filter(p => p.division === 'bakery').reduce((s, p) => s + (p.amount || 0), 0);
+      }
+
+      const primaryOutstanding = Math.max(0, (primarySubtotal + primaryOldBalance) - primaryPaid);
+      const bakeryOutstanding  = Math.max(0, (bakerySubtotal  + bakeryOldBalance)  - bakeryPaid);
 
       // Combined (for card display)
       const subtotal = primarySubtotal + bakerySubtotal;
       const oldBalance = primaryOldBalance + bakeryOldBalance;
       const grandTotal = subtotal + oldBalance;
       const paidAmount = primaryPaid + bakeryPaid;
-      const outstandingBalance = (subtotal + oldBalance) - paidAmount;
+      const outstandingBalance = Math.max(0, (subtotal + oldBalance) - paidAmount);
 
       const finalItems = [...primaryItems, ...bakeryItems];
 
@@ -153,8 +178,10 @@ export default function DailyBillingPage() {
         return;
       }
 
-      const billNumber = `BILL-${clientId.substring(0,6).toUpperCase()}-${filterDate.replace(/-/g, '')}`;
-      const updatedInfo = getPaymentUpdateInfo(clientId, filterDate, 'all');
+      const billNumber = isDirect
+        ? `BILL-DIRECT-${clientOrders[0].id.substring(0,6).toUpperCase()}-${filterDate.replace(/-/g, '')}`
+        : `BILL-${clientId.substring(0,6).toUpperCase()}-${filterDate.replace(/-/g, '')}`;
+      const updatedInfo = isDirect ? null : getPaymentUpdateInfo(clientId, filterDate, 'all');
 
       rows.push({
         clientId, clientName, region, deliveryDate: filterDate, billNumber,
@@ -166,7 +193,7 @@ export default function DailyBillingPage() {
     });
 
     return rows.sort((a, b) => a.clientName.localeCompare(b.clientName));
-  }, [orders, clients, products, filterDate, filterRegion, filterClientId, search]);
+  }, [orders, clients, products, filterDate, filterRegion, filterClientId, search, activeDivision]);
 
   // Removed unused aggregated stats
 
@@ -208,8 +235,10 @@ export default function DailyBillingPage() {
     }
 
     const base = {
+      orderType:  paymentModalRow.clientId === 'direct' ? 'direct' : 'client',
       clientId:   paymentModalRow.clientId,
       clientName: paymentModalRow.clientName,
+      region:     paymentModalRow.region,
       invoiceId:  paymentInvoiceId || null,
       updatedBy:  isStaff ? 'Staff' : 'Admin',
       paymentDate,

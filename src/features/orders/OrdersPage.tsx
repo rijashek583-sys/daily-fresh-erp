@@ -1,16 +1,17 @@
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Edit2, Trash2, Calendar, Plus, CreditCard, Clock } from 'lucide-react';
+import { Edit2, Trash2, Calendar, Plus, CreditCard, Clock, ShoppingBag } from 'lucide-react';
 import { format } from 'date-fns';
-import { type Order, type Region } from '../../types';
+import { type Order, type Region, type OrderType } from '../../types';
 import { useDataStore } from '../../stores/dataStore';
 import { Button, Card, DataTable, PageHeader, type Column, Badge } from '../../components/ui';
 import { useDivisionStore } from '../../stores/divisionStore';
 import { moveToTrash } from '../../services/db';
 import { useAuthStore } from '../../stores/authStore';
-import { formatCurrency, getProductDivision } from '../../lib/utils';
+import { formatCurrency, getProductDivision, cn } from '../../lib/utils';
 import RecordPaymentModal from '../../components/payments/RecordPaymentModal';
 import OrderPaymentHistoryModal from '../../components/payments/OrderPaymentHistoryModal';
+import DirectSaleModal from '../../components/orders/DirectSaleModal';
 
 export default function OrdersPage() {
   const { clients, orders, regions, products, payments } = useDataStore();
@@ -22,6 +23,7 @@ export default function OrdersPage() {
   const [filterDate, setFilterDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
   const [filterRegion, setFilterRegion] = useState<Region | ''>('');
   const [filterClientId, setFilterClientId] = useState<string>('');
+  const [filterOrderType, setFilterOrderType] = useState<'all' | 'client' | 'direct'>('all');
   const [search, setSearch] = useState('');
   const [confirmDeleteOrderId, setConfirmDeleteOrderId] = useState<string | null>(null);
   const { activeDivision: activeTab } = useDivisionStore();
@@ -31,8 +33,10 @@ export default function OrdersPage() {
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [historyModalOrder, setHistoryModalOrder] = useState<Order | null>(null);
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [directSaleModalOpen, setDirectSaleModalOpen] = useState(false);
 
   const getClientRegion = (clientId: string) => {
+    if (clientId === 'direct') return 'Direct Sale / —';
     const client = clients.find(c => c.id === clientId);
     return client?.region || '-';
   };
@@ -48,16 +52,40 @@ export default function OrdersPage() {
   const columns: Column<Order>[] = [
     {
       key: 'client', label: 'Client / Shop',
-      render: r => (
-        <div>
-          <span className="text-sm font-semibold text-[var(--color-text-main)] block">{r.clientName}</span>
-          <span className="text-[10px] text-gray-400 font-mono">#{r.id.slice(0, 8)}</span>
-        </div>
-      ),
+      render: r => {
+        const isDirect = r.orderType === 'direct' || r.clientId === 'direct';
+        return (
+          <div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-sm font-semibold text-[var(--color-text-main)]">
+                {isDirect ? 'Direct Sale' : r.clientName}
+              </span>
+              <span
+                className={cn(
+                  'text-[10px] font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap',
+                  isDirect
+                    ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300'
+                    : 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400'
+                )}
+              >
+                {isDirect ? 'Direct Sale' : 'Client Order'}
+              </span>
+            </div>
+            <span className="text-[10px] text-gray-400 font-mono">#{r.id.slice(0, 8)}</span>
+          </div>
+        );
+      },
     },
     {
       key: 'region', label: 'Region',
-      render: r => <Badge variant="gray">{getClientRegion(r.clientId)}</Badge>,
+      render: r => {
+        const isDirect = r.orderType === 'direct' || r.clientId === 'direct';
+        return (
+          <Badge variant={isDirect ? 'warning' : 'gray'}>
+            {isDirect ? 'Direct Sale / —' : getClientRegion(r.clientId)}
+          </Badge>
+        );
+      },
     },
     {
       key: 'deliveryDate', label: 'Delivery Date',
@@ -210,6 +238,11 @@ export default function OrdersPage() {
     }).filter(o => {
       if (o.items.length === 0 && activeTab !== 'all') return false;
       let matches = true;
+      if (filterOrderType !== 'all') {
+        const isDirect = o.orderType === 'direct' || o.clientId === 'direct';
+        if (filterOrderType === 'direct' && !isDirect) return false;
+        if (filterOrderType === 'client' && isDirect) return false;
+      }
       if (filterDate) {
         matches = matches && o.deliveryDate === filterDate;
       }
@@ -221,28 +254,47 @@ export default function OrdersPage() {
       }
       if (search) {
         const s = search.toLowerCase();
-        matches = matches && (o.clientName.toLowerCase().includes(s) || o.id.toLowerCase().includes(s));
+        const isDirect = o.orderType === 'direct' || o.clientId === 'direct';
+        matches = matches && (
+          (isDirect && 'direct sale'.includes(s)) ||
+          (o.clientName || '').toLowerCase().includes(s) ||
+          (o.id || '').toLowerCase().includes(s)
+        );
       }
       return matches;
     }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [orders, products, filterDate, filterRegion, filterClientId, search, activeTab, clients]);
+  }, [orders, products, filterDate, filterRegion, filterClientId, filterOrderType, search, activeTab, clients]);
 
   return (
     <div className="max-w-7xl mx-auto pb-12">
       <PageHeader
         title="Orders"
-        description="View customer orders, historical item prices, and record payments."
+        description="View customer orders, direct sales, historical item prices, and record payments."
         actions={
-          isAdmin ? (
-            <Button size="md" icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/orders/bulk')}>
-              New Order
+          <div className="flex items-center gap-2">
+            <Button
+              size="md"
+              variant="secondary"
+              icon={<ShoppingBag className="w-4 h-4 text-amber-600 dark:text-amber-400" />}
+              onClick={() => setDirectSaleModalOpen(true)}
+            >
+              New Direct Sale
             </Button>
-          ) : null
+            {isAdmin && (
+              <Button
+                size="md"
+                icon={<Plus className="w-4 h-4" />}
+                onClick={() => navigate('/orders/bulk')}
+              >
+                New Order
+              </Button>
+            )}
+          </div>
         }
       />
 
       <Card className="mb-6">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-semibold text-[var(--color-text-muted)] flex items-center gap-1.5 uppercase tracking-wider">
               <Calendar className="w-3.5 h-3.5" /> Delivery Date
@@ -253,6 +305,21 @@ export default function OrdersPage() {
               onChange={e => setFilterDate(e.target.value)}
               className="w-full px-4 py-2.5 text-sm font-medium rounded-xl border border-gray-200 dark:border-gray-800 bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] transition-all"
             />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+              Order Type
+            </label>
+            <select
+              value={filterOrderType}
+              onChange={e => setFilterOrderType(e.target.value as 'all' | 'client' | 'direct')}
+              className="w-full px-4 py-2.5 text-sm font-medium rounded-xl border border-gray-200 dark:border-gray-800 bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] transition-all"
+            >
+              <option value="all">All Types</option>
+              <option value="client">Client Orders</option>
+              <option value="direct">Direct Sales</option>
+            </select>
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -320,6 +387,12 @@ export default function OrdersPage() {
           setSelectedOrderForPayment(null);
         }}
         order={selectedOrderForPayment}
+      />
+
+      {/* Direct Sale Modal */}
+      <DirectSaleModal
+        isOpen={directSaleModalOpen}
+        onClose={() => setDirectSaleModalOpen(false)}
       />
 
       {/* Order Payment History Modal */}

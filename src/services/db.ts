@@ -26,6 +26,7 @@ import { toast } from 'sonner';
 import { useAuthStore } from '../stores/authStore';
 import { getProductDivision } from '../lib/utils';
 import { useDataStore } from '../stores/dataStore';
+import { type Division, type PaymentMethod } from '../types';
 
 function enforceAdmin() {
   const user = useAuthStore.getState().user;
@@ -228,29 +229,31 @@ export async function moveToTrash(
     batch.delete(originalRef);
 
     // When deleting an order or payment:
-    //  1. Delete its associated ledger entry.
+    //  1. Delete its associated ledger entry (for client orders).
     //  2. Atomically update the client's denormalized aggregates.
-    if (originalCollection === 'orders' && originalData?.clientId) {
-      // Find and trash the associated ledger debit
-      const ledgerQuery = query(
-        collection(db, 'ledger'), 
-        where('type', '==', 'invoice'), 
-        where('invoiceId', '==', docId)
-      );
-      const ledgerSnap = await getDocs(ledgerQuery);
-      ledgerSnap.forEach((lDoc) => {
-        const lTrashRef = doc(db, 'trash', lDoc.id);
-        batch.set(lTrashRef, {
-          originalCollection: 'ledger',
-          originalDocumentId: lDoc.id,
-          originalData: lDoc.data(),
-          deletedAt,
-          deletedBy
+    if (originalCollection === 'orders') {
+      if (originalData?.clientId && originalData.clientId !== 'direct') {
+        // Find and trash the associated ledger debit
+        const ledgerQuery = query(
+          collection(db, 'ledger'), 
+          where('type', '==', 'invoice'), 
+          where('invoiceId', '==', docId)
+        );
+        const ledgerSnap = await getDocs(ledgerQuery);
+        ledgerSnap.forEach((lDoc) => {
+          const lTrashRef = doc(db, 'trash', lDoc.id);
+          batch.set(lTrashRef, {
+            originalCollection: 'ledger',
+            originalDocumentId: lDoc.id,
+            originalData: lDoc.data(),
+            deletedAt,
+            deletedBy
+          });
+          batch.delete(lDoc.ref);
         });
-        batch.delete(lDoc.ref);
-      });
+      }
 
-      // Find and trash all associated payments
+      // Find and trash all associated payments (both client orders and direct sales)
       const paymentsQuery = query(
         collection(db, 'payments'),
         where('invoiceId', '==', docId)
@@ -268,25 +271,27 @@ export async function moveToTrash(
         batch.delete(pDoc.ref);
       });
 
-      // Find and trash all associated ledger credits (payments)
-      const paymentLedgerQuery = query(
-        collection(db, 'ledger'),
-        where('type', '==', 'payment'),
-        where('invoiceId', '==', docId)
-      );
-      const paymentLedgerSnap = await getDocs(paymentLedgerQuery);
-      paymentLedgerSnap.forEach((lDoc) => {
-        const lTrashRef = doc(db, 'trash', lDoc.id);
-        batch.set(lTrashRef, {
-          originalCollection: 'ledger',
-          originalDocumentId: lDoc.id,
-          originalData: lDoc.data(),
-          deletedAt,
-          deletedBy
+      if (originalData?.clientId && originalData.clientId !== 'direct') {
+        // Find and trash all associated ledger credits (payments)
+        const paymentLedgerQuery = query(
+          collection(db, 'ledger'),
+          where('type', '==', 'payment'),
+          where('invoiceId', '==', docId)
+        );
+        const paymentLedgerSnap = await getDocs(paymentLedgerQuery);
+        paymentLedgerSnap.forEach((lDoc) => {
+          const lTrashRef = doc(db, 'trash', lDoc.id);
+          batch.set(lTrashRef, {
+            originalCollection: 'ledger',
+            originalDocumentId: lDoc.id,
+            originalData: lDoc.data(),
+            deletedAt,
+            deletedBy
+          });
+          batch.delete(lDoc.ref);
         });
-        batch.delete(lDoc.ref);
-      });
-    } else if (originalCollection === 'payments' && originalData?.clientId) {
+      }
+    } else if (originalCollection === 'payments' && originalData?.clientId && originalData.clientId !== 'direct') {
       // Find and trash the associated ledger credit
       const ledgerQuery = query(
         collection(db, 'ledger'), 
@@ -308,7 +313,7 @@ export async function moveToTrash(
     }
 
     await batch.commit();
-    if (originalData?.clientId) {
+    if (originalData?.clientId && originalData.clientId !== 'direct') {
       await verifyAndSyncClientTotals(originalData.clientId);
     }
 
@@ -364,95 +369,107 @@ export async function updateProduct(productId: string, updates: any) {
 export async function addOrder(orderData: any) {
   enforceStaffOrAdmin();
   try {
+    const isDirectSale = orderData.orderType === 'direct' || orderData.clientId === 'direct';
     const { clientId, total } = orderData;
-    if (!clientId) throw new Error("Missing client ID");
+    if (!isDirectSale && !clientId) throw new Error("Missing client ID");
 
     let newOrderId = '';
 
     await runTransaction(db, async (transaction) => {
-      // 1. Fetch Client (single document read — safe inside transaction)
-      const clientRef = doc(db, 'clients', clientId);
-      const clientSnap = await transaction.get(clientRef);
-      if (!clientSnap.exists()) throw new Error("Client not found");
+      let clientSnap = null;
+      if (!isDirectSale) {
+        // 1. Fetch Client (single document read — safe inside transaction)
+        const clientRef = doc(db, 'clients', clientId);
+        clientSnap = await transaction.get(clientRef);
+        if (!clientSnap.exists()) throw new Error("Client not found");
+      }
 
       // 2. Create Order Document
       const orderRef = doc(collection(db, COLLECTIONS.ORDERS));
       newOrderId = orderRef.id;
       const oData = {
         ...orderData,
-        id: orderRef.id
+        id: orderRef.id,
+        orderType: isDirectSale ? 'direct' : 'client',
+        clientId: isDirectSale ? 'direct' : clientId,
+        clientName: isDirectSale ? 'Direct Sale' : (orderData.clientName || clientSnap?.data()?.name || ''),
+        region: isDirectSale ? 'Direct Sale' : (orderData.region || clientSnap?.data()?.region || ''),
       };
       transaction.set(orderRef, oData);
 
-      // 3. Create Ledger entries — split by division so every ledger row is division-clean
-      const { products } = useDataStore.getState();
-      const baseLedger = {
-        type: 'invoice',
-        clientId,
-        invoiceId: orderRef.id,
-        createdAt: new Date().toISOString(),
-        billDate: oData.deliveryDate,
-      };
+      // 3. Create Ledger entries — split by division so every ledger row is division-clean (ONLY for client orders)
+      if (!isDirectSale) {
+        const { products } = useDataStore.getState();
+        const baseLedger = {
+          type: 'invoice',
+          clientId,
+          invoiceId: orderRef.id,
+          createdAt: new Date().toISOString(),
+          billDate: oData.deliveryDate,
+        };
 
-      if (orderData.division === 'all') {
-        // Split items into primary and bakery subtotals
-        let primaryTotal = 0;
-        let bakeryTotal = 0;
-        const primaryNames: string[] = [];
-        const bakeryNames: string[] = [];
+        if (orderData.division === 'all') {
+          // Split items into primary and bakery subtotals
+          let primaryTotal = 0;
+          let bakeryTotal = 0;
+          const primaryNames: string[] = [];
+          const bakeryNames: string[] = [];
 
-        oData.items.forEach((i: any) => {
-          const prod = products.find((p: any) => p.id === i.productId);
-          const div = getProductDivision(prod || { name: i.productName });
-          if (div === 'primary') {
-            primaryTotal += i.total;
-            primaryNames.push(i.productName);
-          } else {
-            bakeryTotal += i.total;
-            bakeryNames.push(i.productName);
+          oData.items.forEach((i: any) => {
+            const prod = products.find((p: any) => p.id === i.productId);
+            const div = getProductDivision(prod || { name: i.productName });
+            if (div === 'primary') {
+              primaryTotal += i.total;
+              primaryNames.push(i.productName);
+            } else {
+              bakeryTotal += i.total;
+              bakeryNames.push(i.productName);
+            }
+          });
+
+          if (primaryTotal > 0) {
+            const primaryLedgerRef = doc(collection(db, 'ledger'));
+            transaction.set(primaryLedgerRef, {
+              ...baseLedger,
+              id: primaryLedgerRef.id,
+              amount: primaryTotal,
+              description: `Daily Bill - Primary (${primaryNames.join(', ')})`,
+              division: 'primary'
+            });
           }
-        });
-
-        if (primaryTotal > 0) {
-          const primaryLedgerRef = doc(collection(db, 'ledger'));
-          transaction.set(primaryLedgerRef, {
+          if (bakeryTotal > 0) {
+            const bakeryLedgerRef = doc(collection(db, 'ledger'));
+            transaction.set(bakeryLedgerRef, {
+              ...baseLedger,
+              id: bakeryLedgerRef.id,
+              amount: bakeryTotal,
+              description: `Daily Bill - Bakery (${bakeryNames.join(', ')})`,
+              division: 'bakery'
+            });
+          }
+        } else {
+          const ledgerRef = doc(collection(db, 'ledger'));
+          transaction.set(ledgerRef, {
             ...baseLedger,
-            id: primaryLedgerRef.id,
-            amount: primaryTotal,
-            description: `Daily Bill - Primary (${primaryNames.join(', ')})`,
-            division: 'primary'
+            id: ledgerRef.id,
+            amount: total,
+            description: `Daily Bill (${oData.items.map((i: any) => i.productName).join(', ')})`,
+            division: orderData.division
           });
         }
-        if (bakeryTotal > 0) {
-          const bakeryLedgerRef = doc(collection(db, 'ledger'));
-          transaction.set(bakeryLedgerRef, {
-            ...baseLedger,
-            id: bakeryLedgerRef.id,
-            amount: bakeryTotal,
-            description: `Daily Bill - Bakery (${bakeryNames.join(', ')})`,
-            division: 'bakery'
-          });
-        }
-      } else {
-        const ledgerRef = doc(collection(db, 'ledger'));
-        transaction.set(ledgerRef, {
-          ...baseLedger,
-          id: ledgerRef.id,
-          amount: total,
-          description: `Daily Bill (${oData.items.map((i: any) => i.productName).join(', ')})`,
-          division: orderData.division
-        });
       }
     });
     
-    await verifyAndSyncClientTotals(clientId);
+    if (!isDirectSale && clientId) {
+      await verifyAndSyncClientTotals(clientId);
+    }
 
     // ── Stock integration (additive — runs after billing transaction) ────────
     try {
       await createFinishedStockDeductionsForOrder({
         orderId: newOrderId,
-        clientId: orderData.clientId,
-        clientName: orderData.clientName || '',
+        clientId: isDirectSale ? 'direct' : orderData.clientId,
+        clientName: isDirectSale ? 'Direct Sale' : (orderData.clientName || ''),
         items: orderData.items || [],
         deliveryDate: orderData.deliveryDate,
         division: orderData.division || 'primary',
@@ -494,7 +511,7 @@ export async function updateOrder(orderId: string, updates: any) {
         updates.division !== undefined ||
         updates.items !== undefined
       ) {
-        if (oldData.clientId) {
+        if (oldData.clientId && oldData.clientId !== 'direct') {
           // Delete all old invoice ledger entries for this order
           const ledgerQuery = query(
             collection(db, 'ledger'), 
@@ -573,7 +590,7 @@ export async function updateOrder(orderId: string, updates: any) {
         }
       }
       return {
-        clientIdToSync: oldData.clientId,
+        clientIdToSync: oldData.clientId !== 'direct' ? oldData.clientId : null,
         oldItems: oldData.items,
         oldUpdatedAt: oldData.updatedAt,
         oldClientName: oldData.clientName,
@@ -588,7 +605,7 @@ export async function updateOrder(orderId: string, updates: any) {
     try {
       await adjustFinishedStockForOrderUpdate({
         orderId,
-        clientId: result.clientIdToSync,
+        clientId: result.clientIdToSync || 'direct',
         clientName: result.oldClientName || '',
         oldItems: result.oldItems || [],
         oldUpdatedAt: result.oldUpdatedAt || '',
@@ -625,7 +642,7 @@ export async function updatePayment(paymentId: string, updates: any) {
 
       transaction.update(paymentRef, updates);
 
-      if ((amountDiff !== 0 || updates.division !== undefined) && oldData.clientId) {
+      if ((amountDiff !== 0 || updates.division !== undefined) && oldData.clientId && oldData.clientId !== 'direct') {
         // Keep the ledger credit entry in sync
         const ledgerQuery = query(
           collection(db, 'ledger'), 
@@ -643,7 +660,7 @@ export async function updatePayment(paymentId: string, updates: any) {
           }
         });
       }
-      return oldData.clientId;
+      return oldData.clientId !== 'direct' ? oldData.clientId : null;
     });
     
     if (clientIdToSync) {
@@ -672,30 +689,42 @@ export async function recordPaymentAtomic(paymentData: any) {
       notes,
       region,
       staffId,
-      staffName
+      staffName,
+      orderType
     } = paymentData;
     
+    const isDirectSale = orderType === 'direct' || clientId === 'direct';
+
     // Validate inputs
-    if (!clientId) throw new Error("Missing client ID");
+    if (!isDirectSale && !clientId) throw new Error("Missing client ID");
+    if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
+      throw new Error("Invalid payment amount. Amount must be greater than ₹0.");
+    }
 
     const currentUser = useAuthStore.getState().user;
     const effectiveStaffId = staffId || currentUser?.uid || null;
     const effectiveStaffName = staffName || paymentData.recordedBy || currentUser?.name || currentUser?.displayName || updatedBy || 'Staff';
 
     await runTransaction(db, async (transaction) => {
-      // 1. Fetch Client
-      const clientRef = doc(db, 'clients', clientId);
-      const clientSnap = await transaction.get(clientRef);
-      if (!clientSnap.exists()) throw new Error("Client not found");
-      const clientDocData = clientSnap.data();
-      const resolvedRegion = region || clientDocData.region || '';
-      const resolvedClientName = clientName || clientDocData.name || '';
+      let resolvedRegion = region || (isDirectSale ? 'Direct Sale' : '');
+      let resolvedClientName = clientName || (isDirectSale ? 'Direct Sale' : '');
+
+      if (!isDirectSale) {
+        // 1. Fetch Client
+        const clientRef = doc(db, 'clients', clientId);
+        const clientSnap = await transaction.get(clientRef);
+        if (!clientSnap.exists()) throw new Error("Client not found");
+        const clientDocData = clientSnap.data();
+        resolvedRegion = region || clientDocData.region || '';
+        resolvedClientName = clientName || clientDocData.name || '';
+      }
       
       // 2. Create Payment Document
       const paymentRef = doc(collection(db, COLLECTIONS.PAYMENTS));
-      const pData = {
+      const pData: any = {
         id: paymentRef.id,
-        clientId,
+        orderType: isDirectSale ? 'direct' : 'client',
+        clientId: isDirectSale ? 'direct' : clientId,
         clientName: resolvedClientName,
         region: resolvedRegion,
         invoiceId: invoiceId || null,
@@ -710,47 +739,117 @@ export async function recordPaymentAtomic(paymentData: any) {
         staffName: effectiveStaffName,
         recordedBy: effectiveStaffName,
         updatedBy: effectiveStaffName,
-        division: paymentData.division as 'primary' | 'bakery'
+        division: (paymentData.division === 'bakery' ? 'bakery' : 'primary') as 'primary' | 'bakery'
       };
-
-      // Validate division — payments must be explicitly primary or bakery
-      if (!pData.division || (pData.division !== 'primary' && pData.division !== 'bakery')) {
-        throw new Error('Payment must specify a valid division: "primary" or "bakery"');
-      }
 
       transaction.set(paymentRef, pData);
       
-      // 3. Create Ledger Transaction (Credit)
-      const ledgerRef = doc(collection(db, 'ledger'));
-      transaction.set(ledgerRef, {
-        id: ledgerRef.id,
-        type: 'payment',
-        paymentId: paymentRef.id,
-        clientId,
-        clientName: resolvedClientName,
-        region: resolvedRegion,
-        invoiceId: invoiceId || null,
-        amount,
-        paymentDate: pData.createdAt,
-        paymentMethod: method,
-        description: `Payment received (${method.replace('_', ' ')})${reference ? ` - Ref: ${reference}` : ''}`,
-        createdAt: new Date().toISOString(),
-        billDate: billDate || null,
-        division: pData.division,
-        staffId: effectiveStaffId,
-        staffName: effectiveStaffName,
-        recordedBy: effectiveStaffName,
-      });
+      // 3. Create Ledger Transaction (Credit) - ONLY FOR CLIENT ORDERS
+      if (!isDirectSale) {
+        const ledgerRef = doc(collection(db, 'ledger'));
+        transaction.set(ledgerRef, {
+          id: ledgerRef.id,
+          type: 'payment',
+          paymentId: paymentRef.id,
+          clientId,
+          clientName: resolvedClientName,
+          region: resolvedRegion,
+          invoiceId: invoiceId || null,
+          amount,
+          paymentDate: pData.createdAt,
+          paymentMethod: method,
+          description: `Payment received (${method.replace('_', ' ')})${reference ? ` - Ref: ${reference}` : ''}`,
+          createdAt: new Date().toISOString(),
+          billDate: billDate || null,
+          division: pData.division,
+          staffId: effectiveStaffId,
+          staffName: effectiveStaffName,
+          recordedBy: effectiveStaffName,
+        });
+      }
     });
     
-    await verifyAndSyncClientTotals(clientId);
+    if (!isDirectSale && clientId) {
+      await verifyAndSyncClientTotals(clientId);
+    }
     
     toast.success('Payment recorded successfully');
+    return true;
   } catch (error: any) {
     console.error("Atomic payment error:", error);
     toast.error(error.message || 'Failed to record payment');
     throw error;
   }
+}
+
+export interface DirectSaleItem {
+  productId: string;
+  productName: string;
+  qty: number;
+  unitPrice: number;
+  total: number;
+}
+
+export interface DirectSaleInput {
+  date: string;
+  items: DirectSaleItem[];
+  division?: Division;
+  notes?: string;
+  reference?: string;
+  payment?: {
+    amount: number;
+    method: PaymentMethod;
+    reference?: string;
+  };
+}
+
+export async function createDirectSale(input: DirectSaleInput): Promise<string> {
+  enforceStaffOrAdmin();
+  const currentUser = useAuthStore.getState().user;
+  const staffId = currentUser?.uid || '';
+  const staffName = currentUser?.name || currentUser?.displayName || (currentUser?.role === 'admin' ? 'Admin' : 'Staff');
+
+  const subtotal = input.items.reduce((sum, item) => sum + (item.total || 0), 0);
+  const total = subtotal;
+
+  // 1. Create order with orderType 'direct'
+  const orderId = await addOrder({
+    orderType: 'direct',
+    clientId: 'direct',
+    clientName: 'Direct Sale',
+    region: 'Direct Sale',
+    deliveryDate: input.date,
+    items: input.items,
+    subtotal,
+    tax: 0,
+    total,
+    division: input.division || 'primary',
+    createdAt: `${input.date}T${new Date().toTimeString().split(' ')[0]}`,
+    notes: input.notes || '',
+    staffId,
+    staffName,
+  });
+
+  // 2. If initial payment provided, record payment atomically
+  if (input.payment && input.payment.amount > 0) {
+    await recordPaymentAtomic({
+      orderType: 'direct',
+      clientId: 'direct',
+      clientName: 'Direct Sale',
+      region: 'Direct Sale',
+      invoiceId: orderId,
+      amount: input.payment.amount,
+      method: input.payment.method,
+      reference: input.payment.reference || input.reference,
+      billDate: input.date,
+      paymentDate: input.date,
+      division: input.division || 'primary',
+      staffId,
+      staffName,
+    });
+  }
+
+  return orderId;
 }
 
 // Pricing
@@ -808,23 +907,25 @@ export async function restoreFromTrash(trashDocId: string, trashData: any) {
     batch.delete(trashRef);
 
     // If restoring an order or payment, we must also restore the ledger entry and update client
-    if (trashData.originalCollection === 'orders' && trashData.originalData?.clientId) {
-      // Find and restore the associated ledger debit from trash
-      const lTrashQuery = query(
-        collection(db, 'trash'), 
-        where('originalCollection', '==', 'ledger'),
-        where('originalData.type', '==', 'invoice'),
-        where('originalData.invoiceId', '==', trashDocId)
-      );
-      const lTrashSnap = await getDocs(lTrashQuery);
-      lTrashSnap.forEach((lDoc) => {
-        const lData = lDoc.data();
-        const lRef = doc(db, 'ledger', lData.originalDocumentId);
-        batch.set(lRef, lData.originalData);
-        batch.delete(lDoc.ref);
-      });
+    if (trashData.originalCollection === 'orders') {
+      if (trashData.originalData?.clientId && trashData.originalData.clientId !== 'direct') {
+        // Find and restore the associated ledger debit from trash
+        const lTrashQuery = query(
+          collection(db, 'trash'), 
+          where('originalCollection', '==', 'ledger'),
+          where('originalData.type', '==', 'invoice'),
+          where('originalData.invoiceId', '==', trashDocId)
+        );
+        const lTrashSnap = await getDocs(lTrashQuery);
+        lTrashSnap.forEach((lDoc) => {
+          const lData = lDoc.data();
+          const lRef = doc(db, 'ledger', lData.originalDocumentId);
+          batch.set(lRef, lData.originalData);
+          batch.delete(lDoc.ref);
+        });
+      }
 
-      // Find and restore associated payments from trash
+      // Find and restore associated payments from trash (for both client orders and direct sales)
       const pTrashQuery = query(
         collection(db, 'trash'),
         where('originalCollection', '==', 'payments'),
@@ -838,21 +939,23 @@ export async function restoreFromTrash(trashDocId: string, trashData: any) {
         batch.delete(pDoc.ref);
       });
 
-      // Find and restore associated payment ledger entries from trash
-      const plTrashQuery = query(
-        collection(db, 'trash'),
-        where('originalCollection', '==', 'ledger'),
-        where('originalData.type', '==', 'payment'),
-        where('originalData.invoiceId', '==', trashDocId)
-      );
-      const plTrashSnap = await getDocs(plTrashQuery);
-      plTrashSnap.forEach((lDoc) => {
-        const lData = lDoc.data();
-        const lRef = doc(db, 'ledger', lData.originalDocumentId);
-        batch.set(lRef, lData.originalData);
-        batch.delete(lDoc.ref);
-      });
-    } else if (trashData.originalCollection === 'payments' && trashData.originalData?.clientId) {
+      if (trashData.originalData?.clientId && trashData.originalData.clientId !== 'direct') {
+        // Find and restore associated payment ledger entries from trash
+        const plTrashQuery = query(
+          collection(db, 'trash'),
+          where('originalCollection', '==', 'ledger'),
+          where('originalData.type', '==', 'payment'),
+          where('originalData.invoiceId', '==', trashDocId)
+        );
+        const plTrashSnap = await getDocs(plTrashQuery);
+        plTrashSnap.forEach((lDoc) => {
+          const lData = lDoc.data();
+          const lRef = doc(db, 'ledger', lData.originalDocumentId);
+          batch.set(lRef, lData.originalData);
+          batch.delete(lDoc.ref);
+        });
+      }
+    } else if (trashData.originalCollection === 'payments' && trashData.originalData?.clientId && trashData.originalData.clientId !== 'direct') {
       // Find and restore the associated ledger credit from trash
       const lTrashQuery = query(
         collection(db, 'trash'), 
@@ -870,7 +973,7 @@ export async function restoreFromTrash(trashDocId: string, trashData: any) {
     }
 
     await batch.commit();
-    if (trashData.originalData?.clientId) {
+    if (trashData.originalData?.clientId && trashData.originalData.clientId !== 'direct') {
       await verifyAndSyncClientTotals(trashData.originalData.clientId);
     }
 

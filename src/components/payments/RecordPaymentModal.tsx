@@ -35,10 +35,25 @@ export default function RecordPaymentModal({
   const { clients, orders, payments, products } = useDataStore();
   const { user } = useAuthStore();
 
+  const isDirectSaleOrder = order?.orderType === 'direct' || order?.clientId === 'direct';
+
   // Resolve client & order
   const resolvedClient = useMemo(() => {
     if (client) return client;
-    if (order) return clients.find(c => c.id === order.clientId) || null;
+    if (order) {
+      if (order.orderType === 'direct' || order.clientId === 'direct') {
+        return {
+          id: 'direct',
+          name: 'Direct Sale',
+          region: 'Direct Sale',
+          status: 'active',
+          totalOrders: 1,
+          totalRevenue: order.total,
+          outstanding: 0,
+        } as Client;
+      }
+      return clients.find(c => c.id === order.clientId) || null;
+    }
     return null;
   }, [client, order, clients]);
 
@@ -145,10 +160,13 @@ export default function RecordPaymentModal({
         user?.name || user?.displayName || (user?.role === 'staff' ? 'Staff' : 'Admin');
       const staffId = user?.uid || null;
 
+      const isDirect = resolvedClient.id === 'direct' || isDirectSaleOrder;
+
       await recordPaymentAtomic({
+        orderType: isDirect ? 'direct' : 'client',
         clientId: resolvedClient.id,
         clientName: resolvedClient.name,
-        region: resolvedClient.region || '',
+        region: resolvedClient.region || (isDirect ? 'Direct Sale' : ''),
         invoiceId: order ? order.id : null,
         amount: numericAmount,
         method,
@@ -186,10 +204,12 @@ export default function RecordPaymentModal({
           <div>
             <h2 className="text-lg font-bold text-[var(--color-text-main)] flex items-center gap-2">
               <CreditCard className="w-5 h-5 text-[var(--color-primary)]" />
-              Record Payment
+              {isDirectSaleOrder ? 'Record Direct Sale Payment' : 'Record Payment'}
             </h2>
             <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
-              Record customer collection &middot; Updates Ledger and Pending Collections
+              {isDirectSaleOrder
+                ? 'Record payment for Direct Sale · No client ledger affected'
+                : 'Record customer collection · Updates Ledger and Pending Collections'}
             </p>
           </div>
           <button

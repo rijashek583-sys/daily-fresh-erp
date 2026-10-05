@@ -69,10 +69,14 @@ export interface OrderItem {
   total: number;
 }
 
+export type OrderType = 'client' | 'direct';
+
 export interface Order {
   id: string;
+  orderType?: OrderType; // 'client' | 'direct', defaults to 'client'
   clientId: string;
   clientName: string;
+  region?: string;
   deliveryDate: string;
   items: OrderItem[];
   subtotal: number;
@@ -83,6 +87,8 @@ export interface Order {
   updatedBy?: string;
   updatedAt: string;
   notes?: string;
+  staffId?: string;
+  staffName?: string;
 }
 
 export interface TrashDocument {
@@ -97,6 +103,7 @@ export type PaymentMethod = 'upi' | 'cash' | 'bank_transfer' | 'card';
 
 export interface Payment {
   id: string;
+  orderType?: OrderType; // 'client' | 'direct'
   /** Links this payment to the specific order/invoice it was recorded against. */
   invoiceId?: string;
   clientId: string;

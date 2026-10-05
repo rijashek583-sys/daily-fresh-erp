@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import {
   CreditCard, Search, Calendar, MapPin, CheckCircle2, Clock,
-  ArrowRight, Filter, Receipt, RefreshCw, Banknote, Smartphone, Building
+  ArrowRight, Filter, Receipt, RefreshCw, Banknote, Smartphone, Building, ShoppingBag
 } from 'lucide-react';
 import { format, isToday } from 'date-fns';
 import { useDataStore } from '../../stores/dataStore';
@@ -12,6 +12,7 @@ import { formatCurrency, cn, getProductDivision } from '../../lib/utils';
 import { type Order, type Payment, type PaymentMethod, type Division } from '../../types';
 import RecordPaymentModal from '../../components/payments/RecordPaymentModal';
 import OrderPaymentHistoryModal from '../../components/payments/OrderPaymentHistoryModal';
+import DirectSaleModal from '../../components/orders/DirectSaleModal';
 
 const methodIcon: Record<PaymentMethod, React.ElementType> = {
   upi: Smartphone,
@@ -42,6 +43,7 @@ export default function PaymentsCollectionPage() {
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [historyModalOrder, setHistoryModalOrder] = useState<Order | null>(null);
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [directSaleModalOpen, setDirectSaleModalOpen] = useState(false);
 
   // Filter payments by active division
   const validPayments = useMemo(() => {
@@ -84,8 +86,9 @@ export default function PaymentsCollectionPage() {
       const paid = invoicePaymentsMap.get(o.id) || 0;
       const pending = Math.max(0, total - paid);
 
-      const client = clients.find(c => c.id === o.clientId);
-      const region = client?.region || '';
+      const isDirect = o.orderType === 'direct' || o.clientId === 'direct';
+      const client = isDirect ? null : clients.find(c => c.id === o.clientId);
+      const region = isDirect ? 'Direct Sale / —' : (client?.region || o.region || '');
 
       return {
         ...o,
@@ -109,10 +112,12 @@ export default function PaymentsCollectionPage() {
       .filter(o => {
         if (!search) return true;
         const q = search.toLowerCase();
+        const isDirect = o.orderType === 'direct' || o.clientId === 'direct';
         return (
-          o.clientName.toLowerCase().includes(q) ||
+          (isDirect && 'direct sale'.includes(q)) ||
+          (o.clientName || '').toLowerCase().includes(q) ||
           o.id.toLowerCase().includes(q) ||
-          o.region.toLowerCase().includes(q)
+          (o.region || '').toLowerCase().includes(q)
         );
       })
       .filter(o => (dateFilter ? o.deliveryDate === dateFilter : true))
@@ -125,7 +130,9 @@ export default function PaymentsCollectionPage() {
       .filter(p => {
         if (!search) return true;
         const q = search.toLowerCase();
+        const isDirect = p.orderType === 'direct' || p.clientId === 'direct';
         return (
+          (isDirect && 'direct sale'.includes(q)) ||
           (p.clientName || '').toLowerCase().includes(q) ||
           (p.reference || '').toLowerCase().includes(q) ||
           (p.updatedBy || '').toLowerCase().includes(q) ||
@@ -185,18 +192,28 @@ export default function PaymentsCollectionPage() {
           </p>
         </div>
 
-        {/* Tab switch pills */}
-        <div className="flex p-1 bg-gray-100 dark:bg-gray-800/80 rounded-2xl self-start sm:self-auto shadow-xs">
-          <button
-            type="button"
-            onClick={() => setActiveTab('pending')}
-            className={cn(
-              'px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2',
-              activeTab === 'pending'
-                ? 'bg-white dark:bg-gray-900 text-[var(--color-primary)] shadow-sm'
-                : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-200'
-            )}
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            size="sm"
+            variant="secondary"
+            icon={<ShoppingBag className="w-4 h-4 text-amber-600 dark:text-amber-400" />}
+            onClick={() => setDirectSaleModalOpen(true)}
           >
+            New Direct Sale
+          </Button>
+
+          {/* Tab switch pills */}
+          <div className="flex p-1 bg-gray-100 dark:bg-gray-800/80 rounded-2xl self-start sm:self-auto shadow-xs">
+            <button
+              type="button"
+              onClick={() => setActiveTab('pending')}
+              className={cn(
+                'px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2',
+                activeTab === 'pending'
+                  ? 'bg-white dark:bg-gray-900 text-[var(--color-primary)] shadow-sm'
+                  : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-200'
+              )}
+            >
             <Clock className="w-3.5 h-3.5" />
             <span>Pending Collections</span>
             <span className={cn(
@@ -232,6 +249,7 @@ export default function PaymentsCollectionPage() {
           </button>
         </div>
       </div>
+    </div>
 
       {/* ── Summary Cards ── */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
@@ -351,18 +369,34 @@ export default function PaymentsCollectionPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50 dark:divide-gray-800/40">
-                    {pendingOrders.map(order => (
+                    {pendingOrders.map(order => {
+                      const isDirect = order.orderType === 'direct' || order.clientId === 'direct';
+                      return (
                       <tr key={order.id} className="hover:bg-gray-50/60 dark:hover:bg-gray-800/20 transition-colors">
                         <td className="px-5 py-3.5">
-                          <p className="font-bold text-xs text-[var(--color-text-main)]">
-                            {order.clientName}
-                          </p>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-bold text-xs text-[var(--color-text-main)]">
+                              {isDirect ? 'Direct Sale' : order.clientName}
+                            </span>
+                            <span
+                              className={cn(
+                                'text-[10px] font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap',
+                                isDirect
+                                  ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300'
+                                  : 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400'
+                              )}
+                            >
+                              {isDirect ? 'Direct Sale' : 'Client Order'}
+                            </span>
+                          </div>
                           <span className="text-[10px] text-gray-400 font-mono">
                             #{order.id.slice(0, 10)}
                           </span>
                         </td>
                         <td className="px-4 py-3.5">
-                          <Badge variant="gray">{order.region || '—'}</Badge>
+                          <Badge variant={isDirect ? 'warning' : 'gray'}>
+                            {isDirect ? 'Direct Sale / —' : (order.region || '—')}
+                          </Badge>
                         </td>
                         <td className="px-4 py-3.5 text-xs font-medium text-[var(--color-text-muted)] whitespace-nowrap">
                           {format(new Date(order.deliveryDate), 'MMM d, yyyy')}
@@ -400,7 +434,8 @@ export default function PaymentsCollectionPage() {
                           </div>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </Card>
@@ -408,15 +443,29 @@ export default function PaymentsCollectionPage() {
 
             {/* Mobile Cards */}
             <div className="md:hidden space-y-3">
-              {pendingOrders.map(order => (
+              {pendingOrders.map(order => {
+                const isDirect = order.orderType === 'direct' || order.clientId === 'direct';
+                return (
                 <Card key={order.id} className="p-4 space-y-3">
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <h4 className="font-bold text-sm text-[var(--color-text-main)]">
-                        {order.clientName}
-                      </h4>
-                      <p className="text-[11px] text-gray-400 font-medium">
-                        {order.region ? `${order.region} &middot; ` : ''}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <h4 className="font-bold text-sm text-[var(--color-text-main)]">
+                          {isDirect ? 'Direct Sale' : order.clientName}
+                        </h4>
+                        <span
+                          className={cn(
+                            'text-[10px] font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap',
+                            isDirect
+                              ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300'
+                              : 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400'
+                          )}
+                        >
+                          {isDirect ? 'Direct Sale' : 'Client Order'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-gray-400 font-medium mt-0.5">
+                        {isDirect ? 'Direct Sale / — · ' : (order.region ? `${order.region} · ` : '')}
                         {format(new Date(order.deliveryDate), 'MMM d, yyyy')}
                       </p>
                     </div>
@@ -460,7 +509,8 @@ export default function PaymentsCollectionPage() {
                     </Button>
                   </div>
                 </Card>
-              ))}
+                );
+              })}
             </div>
           </div>
         )
@@ -494,7 +544,9 @@ export default function PaymentsCollectionPage() {
                 <tbody className="divide-y divide-gray-50 dark:divide-gray-800/40">
                   {filteredHistory.map(p => {
                     const Icon = methodIcon[p.method] || Banknote;
-                    const region = p.region || clients.find(c => c.id === p.clientId)?.region || '—';
+                    const isDirect = p.orderType === 'direct' || p.clientId === 'direct';
+                    const region = isDirect ? 'Direct Sale / —' : (p.region || clients.find(c => c.id === p.clientId)?.region || '—');
+                    const clientName = isDirect ? 'Direct Sale' : (p.clientName || '—');
                     const staffName = p.staffName || p.recordedBy || p.updatedBy || 'Staff';
                     return (
                       <tr key={p.id} className="hover:bg-gray-50/60 dark:hover:bg-gray-800/20 transition-colors">
@@ -502,10 +554,15 @@ export default function PaymentsCollectionPage() {
                           {p.createdAt ? format(new Date(p.createdAt), 'MMM d, yyyy h:mm a') : '—'}
                         </td>
                         <td className="px-5 py-3.5 font-bold text-xs text-[var(--color-text-main)]">
-                          {p.clientName || '—'}
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span>{clientName}</span>
+                            {isDirect && (
+                              <Badge variant="warning">Direct Sale</Badge>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-3.5">
-                          <Badge variant="gray">{region}</Badge>
+                          <Badge variant={isDirect ? 'warning' : 'gray'}>{region}</Badge>
                         </td>
                         <td className="px-4 py-3.5">
                           <div className="flex items-center gap-1.5">
@@ -544,6 +601,12 @@ export default function PaymentsCollectionPage() {
           setSelectedOrderForPayment(null);
         }}
         order={selectedOrderForPayment}
+      />
+
+      {/* Direct Sale Modal */}
+      <DirectSaleModal
+        isOpen={directSaleModalOpen}
+        onClose={() => setDirectSaleModalOpen(false)}
       />
 
       {/* Payment History Modal */}
