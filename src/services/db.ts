@@ -659,31 +659,57 @@ export async function updatePayment(paymentId: string, updates: any) {
 export async function recordPaymentAtomic(paymentData: any) {
   enforceStaffOrAdmin();
   try {
-    const { clientId, amount, method, updatedBy, billDate, paymentDate, clientName, invoiceId, reference, notes } = paymentData;
+    const {
+      clientId,
+      amount,
+      method,
+      updatedBy,
+      billDate,
+      paymentDate,
+      clientName,
+      invoiceId,
+      reference,
+      notes,
+      region,
+      staffId,
+      staffName
+    } = paymentData;
     
     // Validate inputs
     if (!clientId) throw new Error("Missing client ID");
-    
+
+    const currentUser = useAuthStore.getState().user;
+    const effectiveStaffId = staffId || currentUser?.uid || null;
+    const effectiveStaffName = staffName || paymentData.recordedBy || currentUser?.name || currentUser?.displayName || updatedBy || 'Staff';
+
     await runTransaction(db, async (transaction) => {
       // 1. Fetch Client
       const clientRef = doc(db, 'clients', clientId);
       const clientSnap = await transaction.get(clientRef);
       if (!clientSnap.exists()) throw new Error("Client not found");
+      const clientDocData = clientSnap.data();
+      const resolvedRegion = region || clientDocData.region || '';
+      const resolvedClientName = clientName || clientDocData.name || '';
       
       // 2. Create Payment Document
       const paymentRef = doc(collection(db, COLLECTIONS.PAYMENTS));
       const pData = {
         id: paymentRef.id,
         clientId,
-        clientName,
+        clientName: resolvedClientName,
+        region: resolvedRegion,
         invoiceId: invoiceId || null,
         amount,
         method,
         reference: reference || null,
         notes: notes || null,
         billDate: billDate || null,
+        paymentDate: paymentDate || (billDate ?? null),
         createdAt: paymentDate ? `${paymentDate} 00:00:00` : new Date().toISOString(),
-        updatedBy,
+        staffId: effectiveStaffId,
+        staffName: effectiveStaffName,
+        recordedBy: effectiveStaffName,
+        updatedBy: effectiveStaffName,
         division: paymentData.division as 'primary' | 'bakery'
       };
 
@@ -701,6 +727,8 @@ export async function recordPaymentAtomic(paymentData: any) {
         type: 'payment',
         paymentId: paymentRef.id,
         clientId,
+        clientName: resolvedClientName,
+        region: resolvedRegion,
         invoiceId: invoiceId || null,
         amount,
         paymentDate: pData.createdAt,
@@ -708,7 +736,10 @@ export async function recordPaymentAtomic(paymentData: any) {
         description: `Payment received (${method.replace('_', ' ')})${reference ? ` - Ref: ${reference}` : ''}`,
         createdAt: new Date().toISOString(),
         billDate: billDate || null,
-        division: pData.division
+        division: pData.division,
+        staffId: effectiveStaffId,
+        staffName: effectiveStaffName,
+        recordedBy: effectiveStaffName,
       });
     });
     

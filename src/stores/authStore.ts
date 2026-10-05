@@ -19,10 +19,22 @@ export const useAuthStore = create<AuthState>((set) => {
       try {
         const userDoc = await getDoc(doc(db, 'users', fbUser.uid));
         if (userDoc.exists()) {
-          const userData = userDoc.data() as Omit<User, 'uid'>;
+          const userData = userDoc.data() as any;
+          if (userData.status === 'inactive') {
+            await firebaseSignOut(auth);
+            set({ user: null, loading: false, initialized: true });
+            return;
+          }
+          const name = userData.name || userData.displayName || fbUser.displayName || fbUser.email?.split('@')[0] || 'User';
           set({
             user: {
               uid: fbUser.uid,
+              name,
+              displayName: userData.displayName || name,
+              email: userData.email || fbUser.email || '',
+              role: userData.role || 'staff',
+              status: userData.status || 'active',
+              createdAt: userData.createdAt || new Date().toISOString(),
               ...userData
             },
             loading: false,
@@ -50,7 +62,16 @@ export const useAuthStore = create<AuthState>((set) => {
     login: async (email, password) => {
       set({ loading: true, initialized: false }); // Force loading state for guards
       try {
-        await signInWithEmailAndPassword(auth, email, password);
+        const cred = await signInWithEmailAndPassword(auth, email, password);
+        const userDoc = await getDoc(doc(db, 'users', cred.user.uid));
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          if (userData.status === 'inactive') {
+            await firebaseSignOut(auth);
+            set({ user: null, loading: false, initialized: true });
+            throw new Error('This account has been deactivated. Please contact your administrator.');
+          }
+        }
         // The onAuthStateChanged listener handles the rest
       } catch (error: any) {
         set({ loading: false, initialized: true });

@@ -484,6 +484,7 @@ export default function PaymentsCollectionPage() {
                   <tr className="bg-gray-50/80 dark:bg-gray-900/60 border-b border-gray-100 dark:border-gray-800 text-[11px] font-bold text-gray-500 uppercase tracking-wider text-left">
                     <th className="px-5 py-3.5">Date</th>
                     <th className="px-5 py-3.5">Client / Shop</th>
+                    <th className="px-4 py-3.5">Region</th>
                     <th className="px-4 py-3.5">Method</th>
                     <th className="px-4 py-3.5">Reference / Notes</th>
                     <th className="px-4 py-3.5">Recorded By</th>
@@ -493,6 +494,8 @@ export default function PaymentsCollectionPage() {
                 <tbody className="divide-y divide-gray-50 dark:divide-gray-800/40">
                   {filteredHistory.map(p => {
                     const Icon = methodIcon[p.method] || Banknote;
+                    const region = p.region || clients.find(c => c.id === p.clientId)?.region || '—';
+                    const staffName = p.staffName || p.recordedBy || p.updatedBy || 'Staff';
                     return (
                       <tr key={p.id} className="hover:bg-gray-50/60 dark:hover:bg-gray-800/20 transition-colors">
                         <td className="px-5 py-3.5 text-xs font-medium text-[var(--color-text-muted)] whitespace-nowrap">
@@ -500,6 +503,9 @@ export default function PaymentsCollectionPage() {
                         </td>
                         <td className="px-5 py-3.5 font-bold text-xs text-[var(--color-text-main)]">
                           {p.clientName || '—'}
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <Badge variant="gray">{region}</Badge>
                         </td>
                         <td className="px-4 py-3.5">
                           <div className="flex items-center gap-1.5">
@@ -514,8 +520,8 @@ export default function PaymentsCollectionPage() {
                           {p.notes ? <span className="text-gray-400 ml-1">({p.notes})</span> : ''}
                           {!p.reference && !p.notes && '—'}
                         </td>
-                        <td className="px-4 py-3.5 text-xs font-medium text-gray-500">
-                          {p.updatedBy || 'Staff'}
+                        <td className="px-4 py-3.5 text-xs font-semibold text-gray-700 dark:text-gray-300">
+                          {staffName}
                         </td>
                         <td className="px-5 py-3.5 text-right font-bold text-sm tabular-nums text-emerald-600 dark:text-emerald-400">
                           {formatCurrency(p.amount)}

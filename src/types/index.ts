@@ -101,11 +101,16 @@ export interface Payment {
   invoiceId?: string;
   clientId: string;
   clientName: string;
+  region?: string;
+  staffId?: string;
+  staffName?: string;
+  recordedBy?: string;
   amount: number;
   method: PaymentMethod;
   reference?: string;
   notes?: string;
   paidAt?: string;
+  paymentDate?: string;
   division: Division; // required — payments must be specifically primary or bakery
   createdAt: string;
   updatedBy?: string;
@@ -120,6 +125,11 @@ export interface LedgerTransaction {
   type: 'payment' | 'invoice';
   paymentId?: string;
   clientId: string;
+  clientName?: string;
+  region?: string;
+  staffId?: string;
+  staffName?: string;
+  recordedBy?: string;
   invoiceId?: string;
   amount: number;
   paymentDate?: string;

@@ -33,6 +33,7 @@ const ReportsPage = lazy(() => import('../features/reports/ReportsPage'));
 const SettingsPage = lazy(() => import('../features/settings/SettingsPage'));
 const TrashPage = lazy(() => import('../features/settings/TrashPage'));
 const PaymentsCollectionPage = lazy(() => import('../features/payments/PaymentsCollectionPage'));
+const StaffPage = lazy(() => import('../features/staff/StaffPage'));
 
 function PageLoader() {
   return (
@@ -73,6 +74,7 @@ const router = createBrowserRouter([
         { path: '/orders/bulk', element: <RequireAdmin><SuspenseWrapper><BulkOrderPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/orders/:orderId/edit', element: <RequireAdmin><SuspenseWrapper><CreateOrderPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/payments', element: <SuspenseWrapper><PaymentsCollectionPage /></SuspenseWrapper> },
+        { path: '/staff', element: <RequireAdmin><SuspenseWrapper><StaffPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/billing', element: <SuspenseWrapper><DailyBillingPage /></SuspenseWrapper> },
         { path: '/ledger', element: <SuspenseWrapper><ClientLedgerPage /></SuspenseWrapper> },
         { path: '/reports', element: <RequireAdmin><SuspenseWrapper><ReportsPage /></SuspenseWrapper></RequireAdmin> },

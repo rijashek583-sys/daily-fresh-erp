@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Package, ShoppingCart,
-  BarChart3, Settings, X, BookOpen, ChevronRight, Receipt, Trash2, LogOut, CreditCard
+  BarChart3, Settings, X, BookOpen, ChevronRight, Receipt, Trash2, LogOut, CreditCard, UserCheck
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useUIStore } from '../../stores/uiStore';
@@ -19,6 +19,7 @@ const adminNavItems: NavItem[] = [
   { label: 'Orders', href: '/orders', icon: ShoppingCart },
   { label: 'Clients', href: '/clients', icon: Users },
   { label: 'Payments', href: '/payments', icon: CreditCard },
+  { label: 'Staff', href: '/staff', icon: UserCheck },
   { label: 'Products', href: '/products', icon: Package },
   { label: 'Daily Bill', href: '/billing', icon: Receipt },
   { label: 'Client Ledger', href: '/ledger', icon: BookOpen },

@@ -141,12 +141,14 @@ export default function RecordPaymentModal({
     setLoading(true);
 
     try {
-      const recordedByName =
-        user?.displayName || user?.name || (user?.role === 'staff' ? 'Staff' : 'Admin');
+      const staffName =
+        user?.name || user?.displayName || (user?.role === 'staff' ? 'Staff' : 'Admin');
+      const staffId = user?.uid || null;
 
       await recordPaymentAtomic({
         clientId: resolvedClient.id,
         clientName: resolvedClient.name,
+        region: resolvedClient.region || '',
         invoiceId: order ? order.id : null,
         amount: numericAmount,
         method,
@@ -154,7 +156,10 @@ export default function RecordPaymentModal({
         notes: notes.trim() || undefined,
         billDate: order ? order.deliveryDate : paymentDate,
         paymentDate,
-        updatedBy: recordedByName,
+        staffId,
+        staffName,
+        recordedBy: staffName,
+        updatedBy: staffName,
         division,
       });
 
