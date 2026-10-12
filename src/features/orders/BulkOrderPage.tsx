@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { format } from "date-fns";
 import {
@@ -197,68 +197,6 @@ export default function BulkOrderPage() {
     [products, activeDivision],
   );
 
-  // ── Sticky Header Refs & Dynamic Offset Calculation ───────────────────────
-  const tableRef = useRef<HTMLTableElement>(null);
-  const theadRef = useRef<HTMLTableSectionElement>(null);
-
-  const updateStickyHeader = useCallback(() => {
-    const table = tableRef.current;
-    const thead = theadRef.current;
-    if (!table || !thead) return;
-
-    const headerEl = document.querySelector("header");
-    const navHeight = headerEl
-      ? headerEl.getBoundingClientRect().height
-      : (window.innerWidth >= 768 ? 80 : 64);
-
-    const tableRect = table.getBoundingClientRect();
-    const theadHeight = thead.offsetHeight;
-    const tableHeight = tableRect.height;
-
-    // How far table top has scrolled past navHeight
-    const distancePastNav = navHeight - tableRect.top;
-    const maxOffset = Math.max(0, tableHeight - theadHeight);
-    const offset = Math.max(0, Math.min(maxOffset, distancePastNav));
-
-    const thElements = thead.querySelectorAll("th");
-    thElements.forEach(th => {
-      th.style.transform = offset > 0 ? `translateY(${offset}px)` : "";
-    });
-  }, []);
-
-  useEffect(() => {
-    let ticking = false;
-
-    const onScrollOrResize = () => {
-      if (!ticking) {
-        window.requestAnimationFrame(() => {
-          updateStickyHeader();
-          ticking = false;
-        });
-        ticking = true;
-      }
-    };
-
-    window.addEventListener("scroll", onScrollOrResize, { passive: true });
-    window.addEventListener("resize", onScrollOrResize, { passive: true });
-
-    const mainEl = document.querySelector("main");
-    if (mainEl) {
-      mainEl.addEventListener("scroll", onScrollOrResize, { passive: true });
-    }
-
-    // Run initial positioning
-    updateStickyHeader();
-
-    return () => {
-      window.removeEventListener("scroll", onScrollOrResize);
-      window.removeEventListener("resize", onScrollOrResize);
-      if (mainEl) {
-        mainEl.removeEventListener("scroll", onScrollOrResize);
-      }
-    };
-  }, [updateStickyHeader, visibleClients, visibleProducts]);
-
   // ── Quantity helpers ──────────────────────────────────────────────────────
   const getQty = (clientId: string, productId: string): number =>
     quantities[clientId]?.[productId] ?? 0;
@@ -427,7 +365,7 @@ export default function BulkOrderPage() {
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="max-w-full pb-24">
+    <div className="max-w-full pb-6">
 
       {/* ── Title + Navigation + Division tabs ── */}
       <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -670,25 +608,24 @@ export default function BulkOrderPage() {
       ) : (
         <Card padding={false} className="overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-300">
 
-          {/* Scrollable table with sticky shop column */}
-          <div className="overflow-x-auto">
+          {/* Scrollable table with sticky shop column and fixed product header */}
+          <div className="overflow-auto max-h-[calc(100dvh-340px)] min-h-[420px] relative">
             <table
-              ref={tableRef}
-              className="w-full border-collapse text-sm"
+              className="w-full border-separate border-spacing-0 text-sm"
               style={{ minWidth: (220 + visibleProducts.length * 115) + "px" }}
             >
               {/* ── Header ── */}
-              <thead ref={theadRef}>
+              <thead>
                 <tr className="bg-gray-50 dark:bg-gray-900">
                   {/* Sticky shop column header — sticky in both directions */}
-                  <th className="sticky left-0 top-16 md:top-20 z-30 bg-gray-50 dark:bg-gray-900 border-b border-r border-gray-200 dark:border-gray-800 px-4 py-3 text-left text-[11px] font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider min-w-[180px] max-w-[220px] select-none">
+                  <th className="sticky top-0 left-0 z-30 bg-gray-50 dark:bg-gray-900 border-b border-r border-gray-200 dark:border-gray-800 px-4 py-3 text-left text-[11px] font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider min-w-[180px] max-w-[220px] select-none">
                     Shop
                   </th>
                   {/* Product column headers — sticky at top */}
                   {visibleProducts.map(p => (
                     <th
                       key={p.id}
-                      className="sticky top-16 md:top-20 z-20 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 px-3 py-3 text-center text-[11px] font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider min-w-[110px] whitespace-nowrap select-none"
+                      className="sticky top-0 z-20 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 px-3 py-3 text-center text-[11px] font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider min-w-[110px] whitespace-nowrap select-none"
                     >
                       {p.name}
                       {p.unit && (
@@ -699,7 +636,7 @@ export default function BulkOrderPage() {
                     </th>
                   ))}
                   {/* Row total header — sticky at top */}
-                  <th className="sticky top-16 md:top-20 z-20 bg-gray-50 dark:bg-gray-900 border-b border-l border-gray-200 dark:border-gray-800 px-4 py-3 text-right text-[11px] font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider min-w-[110px] select-none">
+                  <th className="sticky top-0 z-20 bg-gray-50 dark:bg-gray-900 border-b border-l border-gray-200 dark:border-gray-800 px-4 py-3 text-right text-[11px] font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider min-w-[110px] select-none">
                     Row Total
                   </th>
                 </tr>
@@ -737,7 +674,7 @@ export default function BulkOrderPage() {
                     <tr key={client.id} className={cn("group transition-colors", rowBg)}>
 
                       {/* ── Sticky shop cell ── */}
-                      <td className={cn("sticky left-0 z-10", stickyBg, "border-r border-gray-100 dark:border-gray-800 px-4 py-2.5")}>
+                      <td className={cn("sticky left-0 z-10", stickyBg, "border-b border-r border-gray-100 dark:border-gray-800 px-4 py-2.5")}>
                         <div className="flex items-center gap-1.5 min-w-0">
                           {isSaved && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />}
                           {hasFailed && <XCircle className="w-3.5 h-3.5 text-red-500 shrink-0" />}
@@ -768,7 +705,7 @@ export default function BulkOrderPage() {
                         const qty   = getQty(client.id, p.id);
 
                         return (
-                          <td key={p.id} className="px-2 py-2 text-center align-middle">
+                          <td key={p.id} className="border-b border-gray-100 dark:border-gray-800/60 px-2 py-2 text-center align-middle">
                             <div className="flex flex-col items-center">
                               <input
                                 type="number"
@@ -797,7 +734,7 @@ export default function BulkOrderPage() {
                       })}
 
                       {/* ── Row total ── */}
-                      <td className="border-l border-gray-100 dark:border-gray-800 px-4 py-2 text-right align-middle">
+                      <td className="border-b border-l border-gray-100 dark:border-gray-800 px-4 py-2 text-right align-middle">
                         <span className={cn(
                           "text-sm font-bold tabular-nums",
                           rowTotal > 0
