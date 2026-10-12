@@ -42,7 +42,7 @@ export default function CreateOrderPage() {
 
   const divisionProducts = useMemo(() =>
     products.filter(p => p.status === 'active' && !p.deletedAt && (activeTab === 'all' || getProductDivision(p) === activeTab))
-      .sort((a, b) => (a.displayOrder || 99) - (b.displayOrder || 99)),
+      .sort((a, b) => (a.displayOrder || 999999) - (b.displayOrder || 999999)),
     [products, activeTab]
   );
 

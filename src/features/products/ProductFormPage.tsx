@@ -38,8 +38,9 @@ export default function ProductFormPage() {
       toast.error('Name is required.');
       return;
     }
-    if (!formData.displayOrder || isNaN(parseInt(formData.displayOrder, 10))) {
-      toast.error('Valid display order is required.');
+    const orderNum = parseInt(formData.displayOrder, 10);
+    if (!formData.displayOrder || isNaN(orderNum) || orderNum < 1) {
+      toast.error('Valid display order is required (minimum 1).');
       return;
     }
     if (!formData.division) {
@@ -110,12 +111,12 @@ export default function ProductFormPage() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-semibold text-[var(--color-text-main)] mb-2">Display Order (1-12) <span className="text-red-500">*</span></label>
+                <label className="block text-sm font-semibold text-[var(--color-text-main)] mb-2">Display Order <span className="text-red-500">*</span></label>
                 <input
                   type="number"
                   required
                   min="1"
-                  max="12"
+                  step="1"
                   value={formData.displayOrder}
                   onChange={e => setFormData({ ...formData, displayOrder: e.target.value })}
                   placeholder="e.g. 1"

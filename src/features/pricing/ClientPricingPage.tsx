@@ -128,7 +128,7 @@ export default function ClientPricingPage() {
     if (searchTerm) {
       result = result.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()));
     }
-    return result.sort((a, b) => (a.displayOrder || 99) - (b.displayOrder || 99));
+    return result.sort((a, b) => (a.displayOrder || 999999) - (b.displayOrder || 999999));
   }, [client, searchTerm, activeTab, products]);
 
   return (

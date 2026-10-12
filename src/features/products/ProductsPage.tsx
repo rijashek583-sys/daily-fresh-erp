@@ -28,7 +28,7 @@ export default function ProductsPage() {
   const filtered = products
     .filter(p => !p.deletedAt && p.name.toLowerCase().includes(search.toLowerCase()))
     .filter(p => activeTab === 'all' || getProductDivision(p) === activeTab)
-    .sort((a, b) => (a.displayOrder || 99) - (b.displayOrder || 99));
+    .sort((a, b) => (a.displayOrder || 999999) - (b.displayOrder || 999999));
 
   const handleDelete = async (e: React.MouseEvent, productId: string) => {
     e.stopPropagation();

@@ -193,7 +193,7 @@ export default function BulkOrderPage() {
         !p.deletedAt &&
         (activeDivision === "all" || getProductDivision(p) === activeDivision),
       )
-      .sort((a, b) => (a.displayOrder ?? 99) - (b.displayOrder ?? 99)),
+      .sort((a, b) => (a.displayOrder ?? 999999) - (b.displayOrder ?? 999999)),
     [products, activeDivision],
   );
 

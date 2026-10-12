@@ -39,7 +39,7 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess }: DirectSa
   const activeProducts = useMemo(() => {
     return products
       .filter((p) => p.status === 'active' && !p.deletedAt)
-      .sort((a, b) => (a.displayOrder || 99) - (b.displayOrder || 99));
+      .sort((a, b) => (a.displayOrder || 999999) - (b.displayOrder || 999999));
   }, [products]);
 
   // Form states
