@@ -6,6 +6,7 @@ import UserMenu from '../common/UserMenu';
 import { DivisionTabsDesktop, DivisionDropdownMobile } from '../ui/DivisionTabs';
 import { useDivisionStore } from '../../stores/divisionStore';
 import { useUIStore } from '../../stores/uiStore';
+import InstallAppButton from '../pwa/InstallAppButton';
 
 export default function Header() {
   const { activeDivision, setDivision } = useDivisionStore();
@@ -40,6 +41,9 @@ export default function Header() {
           <div className="hidden md:block">
             <DivisionTabsDesktop activeTab={activeDivision} onChange={setDivision} className="shadow-sm mr-1" />
           </div>
+
+          <InstallAppButton variant="header" />
+
           <ThemeToggle />
           <NotificationBell />
           <div className="w-px h-6 bg-gray-200 dark:bg-gray-800 mx-1 hidden sm:block" />

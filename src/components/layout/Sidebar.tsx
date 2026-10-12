@@ -1,12 +1,11 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Package, ShoppingCart,
-  BarChart3, Settings, BookOpen, ChevronRight, Receipt, Trash2, CreditCard, UserCheck,
-  Download
+  BarChart3, Settings, BookOpen, ChevronRight, Receipt, Trash2, CreditCard, UserCheck
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useAuthStore } from '../../stores/authStore';
-import { usePwaInstall } from '../../hooks/usePwaInstall';
+import InstallAppButton from '../pwa/InstallAppButton';
 
 interface NavItem {
   label: string;
@@ -36,7 +35,6 @@ const staffNavItems: NavItem[] = [
 
 export default function Sidebar() {
   const { user } = useAuthStore();
-  const { isInstallable, installApp } = usePwaInstall();
   const isAdmin = user?.role === 'admin';
   const visible = isAdmin ? adminNavItems : staffNavItems;
 
@@ -87,17 +85,8 @@ export default function Sidebar() {
         </ul>
       </nav>
 
-      <div className="p-4 border-t border-black/[0.04] dark:border-white/[0.04] space-y-1.5">
-        {isInstallable && (
-          <button
-            onClick={installApp}
-            className="w-full flex items-center gap-3.5 px-4 py-3 rounded-2xl text-sm font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 border border-emerald-200/60 dark:border-emerald-800/40 transition-all duration-200"
-            title="Install Daily Fresh on your device"
-          >
-            <Download className="w-4 h-4" />
-            Install App
-          </button>
-        )}
+      <div className="p-4 border-t border-black/[0.04] dark:border-white/[0.04] space-y-2">
+        <InstallAppButton variant="sidebar" />
         <button
           onClick={() => useAuthStore.getState().logout()}
           className="w-full flex items-center gap-3.5 px-4 py-3.5 rounded-2xl text-sm font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-200"
