@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   Users, UserCheck, CreditCard, Search, Calendar, MapPin,
   Plus, CheckCircle2, Clock, Smartphone, Banknote, Building,
-  ArrowRight, Shield, UserX, AlertCircle, RefreshCw, Eye
+  ArrowRight, Shield, UserX, AlertCircle, RefreshCw, Eye,
+  KeyRound, EyeOff
 } from 'lucide-react';
 import { format, isToday } from 'date-fns';
 import { toast } from 'sonner';
@@ -12,7 +13,8 @@ import { type Payment, type PaymentMethod, type User, type Order } from '../../t
 import {
   subscribeToStaffMembers,
   createStaffAccount,
-  updateStaffStatus
+  updateStaffStatus,
+  resetStaffPassword
 } from '../../services/staffService';
 import { Button, Card, Badge, PageHeader, Avatar } from '../../components/ui';
 import { formatCurrency, cn } from '../../lib/utils';
@@ -56,6 +58,16 @@ export default function StaffPage() {
   const [newStaffPassword, setNewStaffPassword] = useState('');
   const [creatingStaff, setCreatingStaff] = useState(false);
   const [createError, setCreateError] = useState('');
+
+  // Reset password modal state
+  const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [selectedStaffForPassword, setSelectedStaffForPassword] = useState<User | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [resettingPassword, setResettingPassword] = useState(false);
+  const [resetPasswordError, setResetPasswordError] = useState('');
 
   // Subscribe to registered staff members in Firestore
   useEffect(() => {
@@ -331,6 +343,81 @@ export default function StaffPage() {
       );
     } catch (err: any) {
       toast.error(err.message || 'Failed to update status');
+    }
+  };
+
+  // Handle password change / reset
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setResetPasswordError('');
+
+    if (!selectedStaffForPassword) return;
+
+    const trimmedNew = newPassword.trim();
+    const trimmedConfirm = confirmPassword.trim();
+
+    if (!trimmedNew) {
+      setResetPasswordError('Please enter a new password.');
+      return;
+    }
+
+    if (trimmedNew.length < 6) {
+      setResetPasswordError('Password must be at least 6 characters long.');
+      return;
+    }
+
+    if (trimmedNew !== trimmedConfirm) {
+      setResetPasswordError('Passwords do not match. Please re-enter to confirm.');
+      return;
+    }
+
+    setResettingPassword(true);
+    try {
+      await resetStaffPassword({
+        uid: selectedStaffForPassword.uid,
+        email: selectedStaffForPassword.email,
+        newPassword: trimmedNew,
+      });
+
+      toast.success(
+        `Password reset link sent to ${selectedStaffForPassword.email} for staff member ${selectedStaffForPassword.name}.`
+      );
+      setResetModalOpen(false);
+      setSelectedStaffForPassword(null);
+      setNewPassword('');
+      setConfirmPassword('');
+      setShowNewPassword(false);
+      setShowConfirmPassword(false);
+    } catch (err: any) {
+      setResetPasswordError(err.message || 'Failed to reset staff password.');
+    } finally {
+      setResettingPassword(false);
+    }
+  };
+
+  // Handle direct reset link via email
+  const handleSendResetEmailDirect = async () => {
+    if (!selectedStaffForPassword) return;
+    setResetPasswordError('');
+    setResettingPassword(true);
+    try {
+      await resetStaffPassword({
+        uid: selectedStaffForPassword.uid,
+        email: selectedStaffForPassword.email,
+      });
+      toast.success(
+        `Secure password reset link sent directly to ${selectedStaffForPassword.email}.`
+      );
+      setResetModalOpen(false);
+      setSelectedStaffForPassword(null);
+      setNewPassword('');
+      setConfirmPassword('');
+      setShowNewPassword(false);
+      setShowConfirmPassword(false);
+    } catch (err: any) {
+      setResetPasswordError(err.message || 'Failed to send password reset email.');
+    } finally {
+      setResettingPassword(false);
     }
   };
 
@@ -818,7 +905,9 @@ export default function StaffPage() {
         <div className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {allKnownStaff.map((staff) => {
-              const regUser = staffList.find((s) => s.name.toLowerCase() === staff.name.toLowerCase());
+              const regUser = staffList.find(
+                (s) => s.uid === staff.id || s.name.toLowerCase() === staff.name.toLowerCase() || (s.email && staff.email && s.email.toLowerCase() === staff.email.toLowerCase())
+              );
               const metrics = staffMetricsMap.get(staff.name.toLowerCase()) || {
                 totalAmount: 0,
                 todayAmount: 0,
@@ -868,7 +957,7 @@ export default function StaffPage() {
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between gap-2 pt-4 mt-2 border-t border-gray-100 dark:border-gray-800">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-4 mt-2 border-t border-gray-100 dark:border-gray-800">
                     <button
                       type="button"
                       onClick={() => {
@@ -880,20 +969,42 @@ export default function StaffPage() {
                       <Eye className="w-3.5 h-3.5" /> View Recorded Payments
                     </button>
 
-                    {regUser && (
-                      <button
-                        type="button"
-                        onClick={() => handleToggleStatus(regUser)}
-                        className={cn(
-                          'text-xs font-semibold px-2.5 py-1 rounded-lg transition-colors',
-                          isActive
-                            ? 'text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40'
-                            : 'text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/40'
-                        )}
-                      >
-                        {isActive ? 'Deactivate' : 'Activate'}
-                      </button>
-                    )}
+                    <div className="flex items-center gap-1.5">
+                      {regUser && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedStaffForPassword(regUser);
+                            setNewPassword('');
+                            setConfirmPassword('');
+                            setResetPasswordError('');
+                            setShowNewPassword(false);
+                            setShowConfirmPassword(false);
+                            setResetModalOpen(true);
+                          }}
+                          className="text-xs font-semibold px-2.5 py-1 rounded-lg text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 border border-amber-200/60 dark:border-amber-900/40 transition-colors flex items-center gap-1"
+                          title="Change or reset staff password"
+                        >
+                          <KeyRound className="w-3.5 h-3.5" />
+                          <span>Change Password</span>
+                        </button>
+                      )}
+
+                      {regUser && (
+                        <button
+                          type="button"
+                          onClick={() => handleToggleStatus(regUser)}
+                          className={cn(
+                            'text-xs font-semibold px-2.5 py-1 rounded-lg transition-colors',
+                            isActive
+                              ? 'text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40'
+                              : 'text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/40'
+                          )}
+                        >
+                          {isActive ? 'Deactivate' : 'Activate'}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </Card>
               );
@@ -992,6 +1103,163 @@ export default function StaffPage() {
                 </Button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: Change / Reset Staff Password ── */}
+      {resetModalOpen && selectedStaffForPassword && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-[var(--color-card)] rounded-3xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col border border-gray-100 dark:border-gray-800">
+            <div className="px-6 py-5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between bg-gray-50/50 dark:bg-gray-900/40">
+              <div>
+                <h3 className="text-base font-bold text-[var(--color-text-main)] flex items-center gap-2">
+                  <KeyRound className="w-5 h-5 text-amber-500" />
+                  Change / Reset Password
+                </h3>
+                <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
+                  Update login password securely for staff member.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setResetModalOpen(false)}
+                className="w-8 h-8 rounded-full flex items-center justify-center text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {/* Selected Staff Info Banner */}
+              <div className="p-3.5 rounded-2xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200/60 dark:border-amber-900/40 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <Avatar name={selectedStaffForPassword.name} size="md" />
+                  <div>
+                    <h4 className="text-xs font-bold text-[var(--color-text-main)]">
+                      {selectedStaffForPassword.name}
+                    </h4>
+                    <p className="text-[11px] text-[var(--color-text-muted)] font-mono">
+                      {selectedStaffForPassword.email}
+                    </p>
+                  </div>
+                </div>
+                <Badge variant={selectedStaffForPassword.status === 'active' ? 'success' : 'danger'}>
+                  {selectedStaffForPassword.status === 'active' ? 'Active' : 'Inactive'}
+                </Badge>
+              </div>
+
+              {/* Security info note */}
+              <div className="flex items-start gap-2 p-2.5 rounded-xl bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-800 text-[11px] text-gray-500 dark:text-gray-400">
+                <Shield className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                <p>
+                  Passwords are securely managed via Firebase Authentication. Existing passwords are never retrieved or stored in plain text.
+                </p>
+              </div>
+
+              <form onSubmit={handleResetPassword} className="space-y-4 pt-1">
+                {/* New Password */}
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="staff-new-password"
+                    className="text-xs font-bold text-[var(--color-text-main)] uppercase tracking-wider flex items-center justify-between"
+                  >
+                    <span>New Password <span className="text-red-500">*</span></span>
+                    <span className="text-[10px] text-gray-400 font-normal lowercase">(min. 6 characters)</span>
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="staff-new-password"
+                      name="newPassword"
+                      type={showNewPassword ? 'text' : 'password'}
+                      placeholder="Enter new password"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      minLength={6}
+                      required
+                      className="w-full pl-3.5 pr-10 py-2.5 text-sm font-medium rounded-xl border border-gray-200 dark:border-gray-800 bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] transition-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPassword(!showNewPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1"
+                      tabIndex={-1}
+                    >
+                      {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Confirm Password */}
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="staff-confirm-password"
+                    className="text-xs font-bold text-[var(--color-text-main)] uppercase tracking-wider"
+                  >
+                    Confirm New Password <span className="text-red-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="staff-confirm-password"
+                      name="confirmPassword"
+                      type={showConfirmPassword ? 'text' : 'password'}
+                      placeholder="Re-enter new password to confirm"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      minLength={6}
+                      required
+                      className="w-full pl-3.5 pr-10 py-2.5 text-sm font-medium rounded-xl border border-gray-200 dark:border-gray-800 bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] transition-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1"
+                      tabIndex={-1}
+                    >
+                      {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                {resetPasswordError && (
+                  <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-xl flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+                    <p className="text-xs font-semibold text-red-700 dark:text-red-300">
+                      {resetPasswordError}
+                    </p>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between gap-3 pt-3 border-t border-gray-100 dark:border-gray-800">
+                  <button
+                    type="button"
+                    onClick={handleSendResetEmailDirect}
+                    disabled={resettingPassword}
+                    className="text-xs font-semibold text-[var(--color-primary)] hover:underline flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <span>Send Reset Email</span>
+                  </button>
+
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setResetModalOpen(false)}
+                      disabled={resettingPassword}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="submit"
+                      loading={resettingPassword}
+                      disabled={resettingPassword}
+                    >
+                      Update Password
+                    </Button>
+                  </div>
+                </div>
+              </form>
+            </div>
           </div>
         </div>
       )}

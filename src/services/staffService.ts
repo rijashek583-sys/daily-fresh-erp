@@ -1,7 +1,7 @@
 import { initializeApp, deleteApp } from 'firebase/app';
-import { getAuth, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+import { getAuth, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'firebase/auth';
 import { doc, setDoc, updateDoc, collection, onSnapshot, query, type FirestoreError } from 'firebase/firestore';
-import { db, firebaseConfig } from '../lib/firebase';
+import { db, auth, firebaseConfig } from '../lib/firebase';
 import { type User } from '../types';
 import { useAuthStore } from '../stores/authStore';
 
@@ -133,3 +133,64 @@ export async function updateStaffStatus(uid: string, status: 'active' | 'inactiv
     throw new Error(error.message || 'Failed to update staff status');
   }
 }
+
+export interface ResetStaffPasswordInput {
+  uid: string;
+  email: string;
+  newPassword?: string;
+}
+
+/**
+ * Initiates a secure password reset for a staff account.
+ * Admin-only operation.
+ * Adheres strictly to security requirements:
+ * 1. Never modifies the currently logged-in Admin's credentials or session.
+ * 2. Uses Firebase Authentication's secure supported password reset flow.
+ * 3. Never writes plain-text passwords to Firestore.
+ * 4. Preserves staff email, uid, role, payment records, and permissions.
+ */
+export async function resetStaffPassword(input: ResetStaffPasswordInput): Promise<void> {
+  enforceAdmin();
+
+  const currentAdmin = useAuthStore.getState().user;
+  if (currentAdmin && currentAdmin.uid === input.uid) {
+    throw new Error("Cannot reset current admin's password through staff management. Please use personal account settings.");
+  }
+
+  const cleanEmail = input.email.trim().toLowerCase();
+  if (!cleanEmail) {
+    throw new Error('Staff email address is required to reset password.');
+  }
+
+  if (input.newPassword !== undefined) {
+    if (input.newPassword.length < 6) {
+      throw new Error('Password must be at least 6 characters.');
+    }
+  }
+
+  try {
+    // Send password reset email via Firebase Auth
+    await sendPasswordResetEmail(auth, cleanEmail);
+
+    // Update metadata audit timestamp in Firestore (never storing passwords)
+    if (input.uid) {
+      const userRef = doc(db, 'users', input.uid);
+      await updateDoc(userRef, {
+        updatedAt: new Date().toISOString(),
+        lastPasswordResetAt: new Date().toISOString(),
+      });
+    }
+  } catch (err: any) {
+    if (err.code === 'auth/user-not-found') {
+      throw new Error(`No authentication account found for "${cleanEmail}".`);
+    }
+    if (err.code === 'auth/invalid-email') {
+      throw new Error('Invalid email format. Please check the email address.');
+    }
+    if (err.code === 'auth/too-many-requests') {
+      throw new Error('Too many password reset requests. Please wait a few minutes before trying again.');
+    }
+    throw new Error(err.message || 'Failed to initiate password reset.');
+  }
+}
+
