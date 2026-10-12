@@ -23,8 +23,9 @@ export default function InstallInstructionsModal({
 }: InstallInstructionsModalProps) {
   // Default tab to detected platform
   const initialTab: 'android' | 'windows' | 'ios' =
-    detectedPlatform === 'windows' ? 'windows' :
-    detectedPlatform === 'ios' ? 'ios' : 'android';
+    detectedPlatform === 'ios' ? 'ios' :
+    detectedPlatform === 'windows' || detectedPlatform === 'macos' ? 'windows' :
+    'android';
 
   const [activeTab, setActiveTab] = useState<'android' | 'windows' | 'ios'>(initialTab);
 
@@ -57,7 +58,7 @@ export default function InstallInstructionsModal({
                 Install Daily Fresh App
               </h3>
               <p className="text-xs text-[var(--color-text-muted)] font-medium mt-0.5">
-                Fast standalone app for Android & Windows
+                Fast standalone app for iPhone, iPad, Android &amp; Windows
               </p>
             </div>
           </div>
@@ -77,14 +78,14 @@ export default function InstallInstructionsModal({
             <button
               type="button"
               onClick={() => setActiveTab('android')}
-              className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all border ${
+              className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-xs font-bold transition-all border ${
                 activeTab === 'android'
                   ? 'bg-[var(--color-primary)] text-white border-[var(--color-primary)] shadow-sm'
                   : 'bg-[var(--color-card)] text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800'
               }`}
             >
               <Smartphone className="w-3.5 h-3.5" />
-              <span>Android Phone</span>
+              <span>Android</span>
               {detectedPlatform === 'android' && (
                 <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-white/20 font-semibold">Your device</span>
               )}
@@ -92,8 +93,24 @@ export default function InstallInstructionsModal({
 
             <button
               type="button"
+              onClick={() => setActiveTab('ios')}
+              className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-xs font-bold transition-all border ${
+                activeTab === 'ios'
+                  ? 'bg-[var(--color-primary)] text-white border-[var(--color-primary)] shadow-sm'
+                  : 'bg-[var(--color-card)] text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800'
+              }`}
+            >
+              <Share2 className="w-3.5 h-3.5" />
+              <span>iPhone / iPad</span>
+              {detectedPlatform === 'ios' && (
+                <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-white/20 font-semibold">Your device</span>
+              )}
+            </button>
+
+            <button
+              type="button"
               onClick={() => setActiveTab('windows')}
-              className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all border ${
+              className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-xs font-bold transition-all border ${
                 activeTab === 'windows'
                   ? 'bg-[var(--color-primary)] text-white border-[var(--color-primary)] shadow-sm'
                   : 'bg-[var(--color-card)] text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800'
@@ -101,23 +118,7 @@ export default function InstallInstructionsModal({
             >
               <Monitor className="w-3.5 h-3.5" />
               <span>Windows PC</span>
-              {detectedPlatform === 'windows' && (
-                <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-white/20 font-semibold">Your device</span>
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveTab('ios')}
-              className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all border ${
-                activeTab === 'ios'
-                  ? 'bg-[var(--color-primary)] text-white border-[var(--color-primary)] shadow-sm'
-                  : 'bg-[var(--color-card)] text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800'
-              }`}
-            >
-              <Share2 className="w-3.5 h-3.5" />
-              <span>iPhone / iOS</span>
-              {detectedPlatform === 'ios' && (
+              {(detectedPlatform === 'windows' || detectedPlatform === 'macos') && (
                 <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-white/20 font-semibold">Your device</span>
               )}
             </button>
@@ -271,11 +272,11 @@ export default function InstallInstructionsModal({
             </div>
           )}
 
-          {/* iOS Step-by-Step */}
+          {/* iOS / iPadOS Step-by-Step */}
           {activeTab === 'ios' && (
             <div className="space-y-3">
               <p className="text-xs font-bold text-[var(--color-text-main)] uppercase tracking-wider">
-                How to Install on iPhone / iPad (Safari)
+                How to Install on iPhone &amp; iPad (Safari)
               </p>
               <ol className="space-y-2.5 text-xs text-[var(--color-text-main)]">
                 <li className="flex items-start gap-3 p-3 rounded-2xl bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-800">
@@ -285,7 +286,7 @@ export default function InstallInstructionsModal({
                   <div>
                     <p className="font-bold">Open Daily Fresh in Safari</p>
                     <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
-                      On iOS devices, Progressive Web Apps must be added via Apple Safari.
+                      On iOS &amp; iPadOS, standalone apps are added through Apple Safari. If you are in Chrome or another app, tap Share &rarr; <strong>Open in Safari</strong>.
                     </p>
                   </div>
                 </li>
@@ -297,7 +298,7 @@ export default function InstallInstructionsModal({
                   <div>
                     <p className="font-bold">Tap the Share Button</p>
                     <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
-                      Tap the <strong>Share</strong> icon (square with an upward arrow) at the bottom of Safari.
+                      Tap the <strong>Share</strong> button (square with an upward arrow) located in the <strong>bottom bar</strong> on iPhone, or on the <strong>top-right toolbar</strong> on iPad.
                     </p>
                   </div>
                 </li>
@@ -307,9 +308,9 @@ export default function InstallInstructionsModal({
                     3
                   </span>
                   <div>
-                    <p className="font-bold">Tap &ldquo;Add to Home Screen&rdquo;</p>
+                    <p className="font-bold">Select &ldquo;Add to Home Screen&rdquo;</p>
                     <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
-                      Scroll down in the share sheet and select <strong>Add to Home Screen</strong>.
+                      Scroll down in the Safari share sheet and tap <strong>Add to Home Screen</strong> (look for the &ldquo;+&rdquo; icon).
                     </p>
                   </div>
                 </li>
@@ -321,7 +322,7 @@ export default function InstallInstructionsModal({
                   <div>
                     <p className="font-bold">Tap &ldquo;Add&rdquo;</p>
                     <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
-                      Tap <strong>Add</strong> in the top-right corner to place Daily Fresh on your home screen.
+                      Tap <strong>Add</strong> in the top-right corner. Daily Fresh will appear as an app icon on your home screen and run in clean full-screen standalone mode.
                     </p>
                   </div>
                 </li>

@@ -33,7 +33,14 @@ export function detectPlatform(): Platform {
   if (typeof window === 'undefined' || !window.navigator) return 'other';
   const ua = window.navigator.userAgent || '';
   if (/android/i.test(ua)) return 'android';
-  if (/ipad|iphone|ipod/i.test(ua)) return 'ios';
+  
+  // Modern iPadOS 13+ devices identify as Macintosh but have touch points
+  const isIPad =
+    /macintosh/i.test(ua) &&
+    typeof window.navigator.maxTouchPoints === 'number' &&
+    window.navigator.maxTouchPoints > 1;
+
+  if (/ipad|iphone|ipod/i.test(ua) || isIPad) return 'ios';
   if (/windows/i.test(ua)) return 'windows';
   if (/macintosh|mac os x/i.test(ua)) return 'macos';
   return 'other';
@@ -60,6 +67,20 @@ export function usePwaInstall() {
     checkStandalone();
     setPlatform(detectPlatform());
 
+    // Listen to display-mode changes
+    const mediaQuery = window.matchMedia('(display-mode: standalone)');
+    const handleModeChange = (e: MediaQueryListEvent) => {
+      if (e.matches) {
+        setIsStandalone(true);
+        setIsInstalled(true);
+      }
+    };
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener('change', handleModeChange);
+    } else if ((mediaQuery as unknown as { addListener?: (fn: (e: MediaQueryListEvent) => void) => void }).addListener) {
+      (mediaQuery as unknown as { addListener: (fn: (e: MediaQueryListEvent) => void) => void }).addListener(handleModeChange);
+    }
+
     const updatePrompt = (p: BeforeInstallPromptEvent | null) => {
       setPrompt(p);
     };
@@ -74,6 +95,11 @@ export function usePwaInstall() {
     window.addEventListener('appinstalled', onAppInstalled);
 
     return () => {
+      if (mediaQuery.removeEventListener) {
+        mediaQuery.removeEventListener('change', handleModeChange);
+      } else if ((mediaQuery as unknown as { removeListener?: (fn: (e: MediaQueryListEvent) => void) => void }).removeListener) {
+        (mediaQuery as unknown as { removeListener: (fn: (e: MediaQueryListEvent) => void) => void }).removeListener(handleModeChange);
+      }
       listeners.delete(updatePrompt);
       window.removeEventListener('appinstalled', onAppInstalled);
     };

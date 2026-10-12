@@ -32,7 +32,14 @@ export default function InstallAppButton({
   const platformLabel =
     platform === 'android' ? 'Android' :
     platform === 'windows' ? 'Windows' :
-    'App';
+    platform === 'ios' ? 'iPhone / iPad' :
+    'Device';
+
+  const platformBadge =
+    platform === 'ios' ? 'iPhone & iPad' :
+    platform === 'android' ? 'Android' :
+    platform === 'windows' ? 'Windows PC' :
+    'Mobile & PC';
 
   const handleClick = async () => {
     await triggerInstall();
@@ -100,7 +107,7 @@ export default function InstallAppButton({
               <p className="text-xs font-bold leading-tight flex items-center gap-1.5">
                 Install Daily Fresh App
                 <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-emerald-200/60 dark:bg-emerald-800/60 font-semibold text-emerald-800 dark:text-emerald-200">
-                  Android &amp; Windows
+                  {platformBadge}
                 </span>
               </p>
               <p className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium mt-0.5">
