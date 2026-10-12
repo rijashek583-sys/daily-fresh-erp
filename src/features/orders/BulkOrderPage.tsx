@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { format } from "date-fns";
 import {
@@ -196,6 +196,68 @@ export default function BulkOrderPage() {
       .sort((a, b) => (a.displayOrder ?? 99) - (b.displayOrder ?? 99)),
     [products, activeDivision],
   );
+
+  // ── Sticky Header Refs & Dynamic Offset Calculation ───────────────────────
+  const tableRef = useRef<HTMLTableElement>(null);
+  const theadRef = useRef<HTMLTableSectionElement>(null);
+
+  const updateStickyHeader = useCallback(() => {
+    const table = tableRef.current;
+    const thead = theadRef.current;
+    if (!table || !thead) return;
+
+    const headerEl = document.querySelector("header");
+    const navHeight = headerEl
+      ? headerEl.getBoundingClientRect().height
+      : (window.innerWidth >= 768 ? 80 : 64);
+
+    const tableRect = table.getBoundingClientRect();
+    const theadHeight = thead.offsetHeight;
+    const tableHeight = tableRect.height;
+
+    // How far table top has scrolled past navHeight
+    const distancePastNav = navHeight - tableRect.top;
+    const maxOffset = Math.max(0, tableHeight - theadHeight);
+    const offset = Math.max(0, Math.min(maxOffset, distancePastNav));
+
+    const thElements = thead.querySelectorAll("th");
+    thElements.forEach(th => {
+      th.style.transform = offset > 0 ? `translateY(${offset}px)` : "";
+    });
+  }, []);
+
+  useEffect(() => {
+    let ticking = false;
+
+    const onScrollOrResize = () => {
+      if (!ticking) {
+        window.requestAnimationFrame(() => {
+          updateStickyHeader();
+          ticking = false;
+        });
+        ticking = true;
+      }
+    };
+
+    window.addEventListener("scroll", onScrollOrResize, { passive: true });
+    window.addEventListener("resize", onScrollOrResize, { passive: true });
+
+    const mainEl = document.querySelector("main");
+    if (mainEl) {
+      mainEl.addEventListener("scroll", onScrollOrResize, { passive: true });
+    }
+
+    // Run initial positioning
+    updateStickyHeader();
+
+    return () => {
+      window.removeEventListener("scroll", onScrollOrResize);
+      window.removeEventListener("resize", onScrollOrResize);
+      if (mainEl) {
+        mainEl.removeEventListener("scroll", onScrollOrResize);
+      }
+    };
+  }, [updateStickyHeader, visibleClients, visibleProducts]);
 
   // ── Quantity helpers ──────────────────────────────────────────────────────
   const getQty = (clientId: string, productId: string): number =>
@@ -611,21 +673,22 @@ export default function BulkOrderPage() {
           {/* Scrollable table with sticky shop column */}
           <div className="overflow-x-auto">
             <table
+              ref={tableRef}
               className="w-full border-collapse text-sm"
               style={{ minWidth: (220 + visibleProducts.length * 115) + "px" }}
             >
               {/* ── Header ── */}
-              <thead>
-                <tr className="bg-gray-50/80 dark:bg-gray-900/60">
-                  {/* Sticky shop column header */}
-                  <th className="sticky left-0 z-20 bg-gray-50 dark:bg-gray-900 border-b border-r border-gray-100 dark:border-gray-800 px-4 py-3 text-left text-[11px] font-bold text-gray-500 uppercase tracking-wider min-w-[180px] max-w-[220px]">
+              <thead ref={theadRef}>
+                <tr className="bg-gray-50 dark:bg-gray-900">
+                  {/* Sticky shop column header — sticky in both directions */}
+                  <th className="sticky left-0 top-16 md:top-20 z-30 bg-gray-50 dark:bg-gray-900 border-b border-r border-gray-200 dark:border-gray-800 px-4 py-3 text-left text-[11px] font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider min-w-[180px] max-w-[220px] select-none">
                     Shop
                   </th>
-                  {/* Product column headers */}
+                  {/* Product column headers — sticky at top */}
                   {visibleProducts.map(p => (
                     <th
                       key={p.id}
-                      className="border-b border-gray-100 dark:border-gray-800 px-3 py-3 text-center text-[11px] font-bold text-gray-500 uppercase tracking-wider min-w-[110px] whitespace-nowrap"
+                      className="sticky top-16 md:top-20 z-20 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 px-3 py-3 text-center text-[11px] font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider min-w-[110px] whitespace-nowrap select-none"
                     >
                       {p.name}
                       {p.unit && (
@@ -635,8 +698,8 @@ export default function BulkOrderPage() {
                       )}
                     </th>
                   ))}
-                  {/* Row total header */}
-                  <th className="border-b border-l border-gray-100 dark:border-gray-800 px-4 py-3 text-right text-[11px] font-bold text-gray-500 uppercase tracking-wider min-w-[110px]">
+                  {/* Row total header — sticky at top */}
+                  <th className="sticky top-16 md:top-20 z-20 bg-gray-50 dark:bg-gray-900 border-b border-l border-gray-200 dark:border-gray-800 px-4 py-3 text-right text-[11px] font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider min-w-[110px] select-none">
                     Row Total
                   </th>
                 </tr>
@@ -661,14 +724,14 @@ export default function BulkOrderPage() {
                     : "bg-gray-50/40 dark:bg-gray-800/10";
 
                   const stickyBg = isSaved
-                    ? "bg-green-50 dark:bg-green-900/20"
+                    ? "bg-emerald-50 dark:bg-[#064e3b]"
                     : hasFailed
-                    ? "bg-red-50 dark:bg-red-900/20"
+                    ? "bg-red-50 dark:bg-[#7f1d1d]"
                     : hasEnteredQty
-                    ? "bg-white dark:bg-gray-900"
+                    ? "bg-amber-50 dark:bg-[#1e293b]"
                     : idx % 2 === 0
-                    ? "bg-[var(--color-card)]"
-                    : "bg-gray-50/80 dark:bg-gray-800/20";
+                    ? "bg-white dark:bg-[#151A23]"
+                    : "bg-[#F8FAFC] dark:bg-[#111620]";
 
                   return (
                     <tr key={client.id} className={cn("group transition-colors", rowBg)}>
@@ -754,7 +817,7 @@ export default function BulkOrderPage() {
           </div>
 
           {/* ── Save / footer bar ── */}
-          <div className="sticky bottom-0 px-6 py-3.5 border-t border-gray-100 dark:border-gray-800 bg-[var(--color-card)] flex flex-col sm:flex-row items-center justify-between gap-4 z-30">
+          <div className="sticky bottom-0 px-6 py-3.5 border-t border-gray-100 dark:border-gray-800 bg-[var(--color-card)] flex flex-col sm:flex-row items-center justify-between gap-4 z-40">
             <div>
               <p className="text-xs font-semibold text-[var(--color-text-muted)]">
                 {pendingShops.length} shop(s) ready to save&nbsp;&middot;&nbsp;{totalItemCount} item(s)
