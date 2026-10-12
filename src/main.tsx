@@ -4,16 +4,19 @@ import './index.css';
 import App from './App.tsx';
 import { registerSW } from 'virtual:pwa-register';
 
-// Register service worker for automatic updates
-const updateSW = registerSW({
+// Register service worker for safe automatic updates
+registerSW({
+  immediate: true,
   onNeedRefresh() {
-    // Force refresh when new content is available
-    if (confirm('New version available. Reload to update?')) {
-      updateSW(true);
-    }
+    console.log('Daily Fresh PWA: update available, will activate on next visit.');
   },
-  onOfflineReady() {
-    console.log('App is ready to work offline');
+  onRegisteredSW(_swUrl, registration) {
+    if (registration) {
+      // Periodically check for application updates (hourly)
+      setInterval(() => {
+        registration.update().catch(() => {});
+      }, 60 * 60 * 1000);
+    }
   },
 });
 

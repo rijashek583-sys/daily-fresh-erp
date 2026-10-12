@@ -1,11 +1,13 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Package, ShoppingCart,
-  BarChart3, Settings, X, BookOpen, ChevronRight, Receipt, Trash2, LogOut, CreditCard, UserCheck
+  BarChart3, Settings, X, BookOpen, ChevronRight, Receipt, Trash2, LogOut, CreditCard, UserCheck,
+  Download
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useUIStore } from '../../stores/uiStore';
 import { useAuthStore } from '../../stores/authStore';
+import { usePwaInstall } from '../../hooks/usePwaInstall';
 import { Avatar } from '../ui';
 
 interface NavItem {
@@ -37,6 +39,7 @@ const staffNavItems: NavItem[] = [
 export default function MobileSidebar() {
   const { sidebarOpen, setSidebarOpen } = useUIStore();
   const { user } = useAuthStore();
+  const { isInstallable, installApp } = usePwaInstall();
   const isAdmin = user?.role === 'admin';
   const visible = isAdmin ? adminNavItems : staffNavItems;
 
@@ -124,6 +127,18 @@ export default function MobileSidebar() {
 
         {/* User footer */}
         <div className="shrink-0 p-4 border-t border-gray-200/50 dark:border-white/[0.04]">
+          {isInstallable && (
+            <button
+              onClick={() => {
+                setSidebarOpen(false);
+                installApp();
+              }}
+              className="w-full mb-3 flex items-center justify-center gap-2.5 px-4 py-2.5 rounded-xl text-sm font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 border border-emerald-200/60 dark:border-emerald-800/40 transition-all duration-200"
+            >
+              <Download className="w-4 h-4" />
+              Install Daily Fresh
+            </button>
+          )}
           <div className="flex items-center gap-3 mb-3">
             <Avatar name={user?.displayName ?? 'U'} size="sm" />
             <div className="min-w-0 flex-1">
