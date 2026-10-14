@@ -395,13 +395,25 @@ export default function OrdersPage() {
     },
     {
       key: 'total', label: 'Total', align: 'right',
-      render: r => <span className="text-sm font-bold text-[var(--color-text-main)] tabular-nums">{formatCurrency(r.total)}</span>,
+      render: r => {
+        const credit = r.creditApplied || 0;
+        return (
+          <div className="flex flex-col items-end">
+            <span className="text-sm font-bold text-[var(--color-text-main)] tabular-nums">{formatCurrency(r.total)}</span>
+            {credit > 0 && (
+              <span className="text-[10px] font-semibold text-green-600 dark:text-green-400">
+                -{formatCurrency(credit)} credit
+              </span>
+            )}
+          </div>
+        );
+      }
     },
     {
       key: 'paid', label: 'Paid', align: 'right',
       render: r => {
         const orderPayments = payments.filter(p => !p.deletedAt && p.invoiceId === r.id);
-        const paid = orderPayments.reduce((s, p) => s + (p.amount || 0), 0);
+        const paid = orderPayments.reduce((s, p) => s + (p.appliedAmount !== undefined ? p.appliedAmount : (p.amount || 0)), 0);
         return (
           <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">
             {formatCurrency(paid)}
@@ -413,8 +425,10 @@ export default function OrdersPage() {
       key: 'pending', label: 'Pending', align: 'right',
       render: r => {
         const orderPayments = payments.filter(p => !p.deletedAt && p.invoiceId === r.id);
-        const paid = orderPayments.reduce((s, p) => s + (p.amount || 0), 0);
-        const pending = Math.max(0, r.total - paid);
+        const paid = orderPayments.reduce((s, p) => s + (p.appliedAmount !== undefined ? p.appliedAmount : (p.amount || 0)), 0);
+        const credit = r.creditApplied || 0;
+        const netDue = Math.max(0, r.total - credit);
+        const pending = Math.max(0, netDue - paid);
         return pending <= 0.01 ? (
           <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full whitespace-nowrap">
             Paid
@@ -430,8 +444,10 @@ export default function OrdersPage() {
       key: 'actions', label: '', align: 'right',
       render: r => {
         const orderPayments = payments.filter(p => !p.deletedAt && p.invoiceId === r.id);
-        const paid = orderPayments.reduce((s, p) => s + (p.amount || 0), 0);
-        const pending = Math.max(0, r.total - paid);
+        const paid = orderPayments.reduce((s, p) => s + (p.appliedAmount !== undefined ? p.appliedAmount : (p.amount || 0)), 0);
+        const credit = r.creditApplied || 0;
+        const netDue = Math.max(0, r.total - credit);
+        const pending = Math.max(0, netDue - paid);
 
         return (
           <div className="flex items-center justify-end gap-2 whitespace-nowrap">

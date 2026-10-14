@@ -1,11 +1,12 @@
 import { useState, useMemo } from 'react';
-import { BookOpen, TrendingUp, TrendingDown, Download, MapIcon, Users } from 'lucide-react';
+import { BookOpen, TrendingUp, TrendingDown, Download, MapIcon, Users, Clock, CheckCircle2, Wallet } from 'lucide-react';
 import { useDataStore } from '../../stores/dataStore';
 import { useDivisionStore } from '../../stores/divisionStore';
 import { Button, Badge, Card, PageHeader } from '../../components/ui';
 import { formatCurrency } from '../../lib/utils';
 import { format } from 'date-fns';
 import { type Region, type FilterDivision } from '../../types';
+import { getClientMetrics } from '../../lib/billing';
 
 interface LedgerEntry {
   id: string;
@@ -16,6 +17,11 @@ interface LedgerEntry {
   debit: number;
   credit: number;
   balance: number;
+  division?: string;
+  excessCredit?: number;
+  creditApplied?: number;
+  appliedAmount?: number;
+  isAdvance?: boolean;
 }
 
 const STORAGE_KEY_REGION = 'ledger_selected_region';
@@ -90,6 +96,11 @@ export default function ClientLedgerPage() {
         description: l.description || (isOpening ? 'Opening Balance' : isPayment ? `Payment received (${l.paymentMethod?.replace('_', ' ')})` : 'Daily Bill'),
         debit: (isInvoice || isOpening) ? (l.amount || 0) : 0,
         credit: isPayment ? (l.amount || 0) : 0,
+        division: l.division,
+        excessCredit: l.excessCredit,
+        creditApplied: l.creditApplied,
+        appliedAmount: l.appliedAmount,
+        isAdvance: l.isAdvance,
       };
     });
 
@@ -112,6 +123,8 @@ export default function ClientLedgerPage() {
       currentBalance: runningBalance
     };
   }, [clientId, ledger, activeDivision]);
+
+  const metrics = useMemo(() => clientId ? getClientMetrics(clientId, activeDivision) : null, [clientId, activeDivision, ledger]);
 
   const selectClass = "w-full px-4 py-3.5 text-sm rounded-2xl transition-all duration-200 outline-none font-medium appearance-none bg-no-repeat bg-[var(--color-input-bg)] text-[var(--color-text-main)] border-2 border-transparent focus:border-[var(--color-primary)] focus:bg-[var(--color-card)] shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed";
   const chevronBg = { backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239CA3AF'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`, backgroundPosition: 'right 1rem center', backgroundSize: '1.25rem 1.25rem' };
@@ -197,7 +210,7 @@ export default function ClientLedgerPage() {
         <>
 
           {/* Stats Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8 items-stretch">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8 items-stretch">
             <Card className="flex flex-col justify-between">
               <div className="flex items-center gap-2 mb-4">
                 <div className="w-8 h-8 rounded-full bg-[var(--color-primary)]/10 flex items-center justify-center">
@@ -217,16 +230,44 @@ export default function ClientLedgerPage() {
               <p className="text-2xl font-semibold text-[var(--color-success)] tracking-tight">{formatCurrency(totalCredit)}</p>
             </Card>
             <Card className="flex flex-col justify-between relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-[var(--color-primary)]/5 rounded-full blur-2xl -translate-y-1/2 translate-x-1/3" />
               <div className="flex items-center gap-2 mb-4 relative">
-                <p className="text-sm font-bold text-[var(--color-text-muted)]">
-                  {currentBalance > 0 ? 'Outstanding Balance' : currentBalance < 0 ? 'Advance Credit' : 'Current Balance'}
-                </p>
+                <div className="w-8 h-8 rounded-full bg-amber-500/10 flex items-center justify-center">
+                  <Clock className="w-4 h-4 text-amber-600" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-[var(--color-text-muted)]">Outstanding Due</p>
+                  {activeDivision === 'all' && metrics && (
+                    <p className="text-[10px] text-gray-400">P: {formatCurrency(metrics.primaryOutstanding)} · B: {formatCurrency(metrics.bakeryOutstanding)}</p>
+                  )}
+                </div>
               </div>
               <div className="relative">
-                <p className={`text-3xl font-semibold tracking-tight ${currentBalance > 0 ? 'text-amber-600 dark:text-amber-400' : currentBalance < 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-[var(--color-text-main)]'}`}>{formatCurrency(Math.abs(currentBalance))}</p>
-                <Badge variant={currentBalance > 0 ? 'warning' : currentBalance < 0 ? 'success' : 'gray'} className="mt-2 relative z-10">
-                  {currentBalance > 0 ? 'Receivable' : currentBalance < 0 ? 'Advance Credit' : 'Settled'}
+                <p className="text-3xl font-semibold tracking-tight text-amber-600 dark:text-amber-400">
+                  {formatCurrency(metrics?.outstanding || 0)}
+                </p>
+                <Badge variant={(metrics?.outstanding || 0) > 0 ? 'warning' : 'gray'} className="mt-2 relative z-10">
+                  {(metrics?.outstanding || 0) > 0 ? 'Receivable' : 'Settled'}
+                </Badge>
+              </div>
+            </Card>
+            <Card className="flex flex-col justify-between relative overflow-hidden">
+              <div className="flex items-center gap-2 mb-4 relative">
+                <div className="w-8 h-8 rounded-full bg-emerald-500/10 flex items-center justify-center">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-[var(--color-text-muted)]">Available Credit</p>
+                  {activeDivision === 'all' && metrics && (
+                    <p className="text-[10px] text-gray-400">P: {formatCurrency(metrics.primaryCredit)} · B: {formatCurrency(metrics.bakeryCredit)}</p>
+                  )}
+                </div>
+              </div>
+              <div className="relative">
+                <p className="text-3xl font-semibold tracking-tight text-emerald-600 dark:text-emerald-400">
+                  {formatCurrency(metrics?.credit || 0)}
+                </p>
+                <Badge variant={(metrics?.credit || 0) > 0 ? 'success' : 'gray'} className="mt-2 relative z-10">
+                  {(metrics?.credit || 0) > 0 ? 'Advance Credit' : 'No Credit'}
                 </Badge>
               </div>
             </Card>
@@ -264,7 +305,24 @@ export default function ClientLedgerPage() {
                         </Badge>
                       </td>
                       <td className="px-6 py-4">
-                        <p className="text-sm font-medium text-[var(--color-text-main)] max-w-[300px] truncate">{entry.description}</p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="text-sm font-medium text-[var(--color-text-main)] max-w-[300px] truncate">{entry.description}</p>
+                          {entry.division && entry.division !== 'all' && (
+                            <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${entry.division === 'bakery' ? 'bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300' : 'bg-blue-100 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300'}`}>
+                              {entry.division === 'bakery' ? 'Bakery' : 'Primary'}
+                            </span>
+                          )}
+                        </div>
+                        {entry.excessCredit && entry.excessCredit > 0 ? (
+                          <p className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 mt-0.5">
+                            Advance Credit Created: +{formatCurrency(entry.excessCredit)}
+                          </p>
+                        ) : null}
+                        {entry.creditApplied && entry.creditApplied > 0 ? (
+                          <p className="text-[10px] font-semibold text-purple-600 dark:text-purple-400 mt-0.5">
+                            Previous Credit Applied: -{formatCurrency(entry.creditApplied)}
+                          </p>
+                        ) : null}
                       </td>
                       <td className="px-6 py-4 text-right">
                         {entry.debit > 0 ? (

@@ -30,6 +30,12 @@ interface DailyBillRow {
   bakeryOldBalance: number;
   primaryPaid: number;
   bakeryPaid: number;
+  primaryReceived: number;
+  bakeryReceived: number;
+  primaryExcess: number;
+  bakeryExcess: number;
+  primaryCreditApplied: number;
+  bakeryCreditApplied: number;
   primaryOutstanding: number;
   bakeryOutstanding: number;
   updatedInfo: string | null;
@@ -147,18 +153,48 @@ export default function DailyBillingPage() {
       let bakeryOldBalance = 0;
       let primaryPaid = 0;
       let bakeryPaid = 0;
+      let primaryReceived = 0;
+      let bakeryReceived = 0;
+      let primaryExcess = 0;
+      let bakeryExcess = 0;
+      let primaryCreditApplied = 0;
+      let bakeryCreditApplied = 0;
 
       if (!isDirect) {
         primaryOldBalance = activeDivision === 'bakery' ? 0 : calculateOldBalance(clientId, filterDate, 'primary', currentInvoiceIds);
         bakeryOldBalance  = activeDivision === 'primary' ? 0 : calculateOldBalance(clientId, filterDate, 'bakery',  currentInvoiceIds);
-        primaryPaid = activeDivision === 'bakery' ? 0 : calculatePaymentsOnDate(clientId, filterDate, 'primary');
-        bakeryPaid  = activeDivision === 'primary' ? 0 : calculatePaymentsOnDate(clientId, filterDate, 'bakery');
+        
+        const { payments } = useDataStore.getState();
+        const clientDayPayments = payments.filter(p => 
+          p.clientId === clientId && 
+          !p.deletedAt && 
+          (p.billDate === filterDate || (p.paymentDate || p.createdAt).substring(0, 10) === filterDate)
+        );
+
+        const primaryDayPayments = clientDayPayments.filter(p => p.division === 'primary');
+        const bakeryDayPayments = clientDayPayments.filter(p => p.division === 'bakery');
+
+        primaryReceived = primaryDayPayments.reduce((s, p) => s + (p.amount || 0), 0);
+        primaryPaid = primaryDayPayments.reduce((s, p) => s + (p.appliedAmount !== undefined ? p.appliedAmount : (p.amount || 0)), 0);
+        primaryExcess = primaryDayPayments.reduce((s, p) => s + (p.excessCredit || 0), 0);
+
+        bakeryReceived = bakeryDayPayments.reduce((s, p) => s + (p.amount || 0), 0);
+        bakeryPaid = bakeryDayPayments.reduce((s, p) => s + (p.appliedAmount !== undefined ? p.appliedAmount : (p.amount || 0)), 0);
+        bakeryExcess = bakeryDayPayments.reduce((s, p) => s + (p.excessCredit || 0), 0);
+
+        primaryCreditApplied = clientOrders.reduce((s, o) => s + (o.primaryCreditApplied || (o.division === 'primary' ? (o.creditApplied || 0) : 0) || 0), 0);
+        bakeryCreditApplied = clientOrders.reduce((s, o) => s + (o.bakeryCreditApplied || (o.division === 'bakery' ? (o.creditApplied || 0) : 0) || 0), 0);
       } else {
         // Direct sales have no old balance. Payments are read from order invoiceId.
         const { payments } = useDataStore.getState();
         const orderPayments = payments.filter(p => !p.deletedAt && p.invoiceId === clientOrders[0].id);
-        primaryPaid = orderPayments.filter(p => p.division === 'primary').reduce((s, p) => s + (p.amount || 0), 0);
-        bakeryPaid = orderPayments.filter(p => p.division === 'bakery').reduce((s, p) => s + (p.amount || 0), 0);
+        const pPayments = orderPayments.filter(p => p.division === 'primary');
+        const bPayments = orderPayments.filter(p => p.division === 'bakery');
+        
+        primaryReceived = pPayments.reduce((s, p) => s + (p.amount || 0), 0);
+        primaryPaid = primaryReceived;
+        bakeryReceived = bPayments.reduce((s, p) => s + (p.amount || 0), 0);
+        bakeryPaid = bakeryReceived;
       }
 
       const primaryOutstanding = Math.max(0, (primarySubtotal + primaryOldBalance) - primaryPaid);
@@ -187,7 +223,9 @@ export default function DailyBillingPage() {
         clientId, clientName, region, deliveryDate: filterDate, billNumber,
         items, subtotal, oldBalance, grandTotal, paidAmount, outstandingBalance,
         primarySubtotal, bakerySubtotal, primaryOldBalance, bakeryOldBalance,
-        primaryPaid, bakeryPaid, primaryOutstanding, bakeryOutstanding,
+        primaryPaid, bakeryPaid, primaryReceived, bakeryReceived, primaryExcess, bakeryExcess,
+        primaryCreditApplied, bakeryCreditApplied,
+        primaryOutstanding, bakeryOutstanding,
         updatedInfo, invoiceId: clientOrders[0].id
       });
     });
@@ -225,13 +263,16 @@ export default function DailyBillingPage() {
       toast.error('Please enter a payment amount for at least one division.');
       return;
     }
-    if (primaryValid && primaryAmt > paymentModalRow.primaryOutstanding + 0.01) {
-      toast.error(`Primary payment exceeds outstanding (${formatCurrency(paymentModalRow.primaryOutstanding)}).`);
-      return;
-    }
-    if (bakeryValid && bakeryAmt > paymentModalRow.bakeryOutstanding + 0.01) {
-      toast.error(`Bakery payment exceeds outstanding (${formatCurrency(paymentModalRow.bakeryOutstanding)}).`);
-      return;
+    const isDirect = paymentModalRow.clientId === 'direct';
+    if (isDirect) {
+      if (primaryValid && primaryAmt > paymentModalRow.primaryOutstanding + 0.01) {
+        toast.error(`Primary payment exceeds outstanding (${formatCurrency(paymentModalRow.primaryOutstanding)}).`);
+        return;
+      }
+      if (bakeryValid && bakeryAmt > paymentModalRow.bakeryOutstanding + 0.01) {
+        toast.error(`Bakery payment exceeds outstanding (${formatCurrency(paymentModalRow.bakeryOutstanding)}).`);
+        return;
+      }
     }
 
     const base = {
@@ -379,9 +420,17 @@ export default function DailyBillingPage() {
                 <div class="div-summary primary-summary">
                   <div class="div-summary-header">Primary Foods</div>
                   <table class="summary-table">
-                    <tr><td>Subtotal</td><td class="text-right">₹${row.primarySubtotal.toFixed(2)}</td></tr>
-                    <tr><td>Previous Balance</td><td class="text-right">₹${row.primaryOldBalance.toFixed(2)}</td></tr>
-                    ${row.primaryPaid > 0 ? `<tr style="color:#166534"><td>Paid Today</td><td class="text-right">₹${row.primaryPaid.toFixed(2)}</td></tr>` : ''}
+                    <tr><td>Bill Subtotal</td><td class="text-right">₹${row.primarySubtotal.toFixed(2)}</td></tr>
+                    ${row.primaryCreditApplied > 0 ? `
+                      <tr style="color:#166534"><td>Previous Credit Applied</td><td class="text-right">-₹${row.primaryCreditApplied.toFixed(2)}</td></tr>
+                      <tr style="font-weight:700"><td>Net Payable</td><td class="text-right">₹${Math.max(0, row.primarySubtotal - row.primaryCreditApplied).toFixed(2)}</td></tr>
+                    ` : ''}
+                    ${row.primaryOldBalance > 0 ? `<tr><td>Previous Balance</td><td class="text-right">₹${row.primaryOldBalance.toFixed(2)}</td></tr>` : ''}
+                    ${row.primaryReceived > 0 ? (row.primaryExcess > 0 ? `
+                      <tr><td>Amount Received</td><td class="text-right">₹${row.primaryReceived.toFixed(2)}</td></tr>
+                      <tr style="color:#166534"><td>Applied to Bill</td><td class="text-right">₹${row.primaryPaid.toFixed(2)}</td></tr>
+                      <tr style="color:#1d4ed8;font-weight:700"><td>Client Credit Created</td><td class="text-right">+₹${row.primaryExcess.toFixed(2)}</td></tr>
+                    ` : `<tr style="color:#166534"><td>Paid Today</td><td class="text-right">₹${row.primaryReceived.toFixed(2)}</td></tr>`) : ''}
                     <tr class="div-outstanding"><td>Outstanding</td><td class="text-right">₹${Math.max(0, row.primaryOutstanding).toFixed(2)}</td></tr>
                   </table>
                 </div>
@@ -393,9 +442,17 @@ export default function DailyBillingPage() {
                 <div class="div-summary bakery-summary">
                   <div class="div-summary-header">Bakery Foods</div>
                   <table class="summary-table">
-                    <tr><td>Subtotal</td><td class="text-right">₹${row.bakerySubtotal.toFixed(2)}</td></tr>
-                    <tr><td>Previous Balance</td><td class="text-right">₹${row.bakeryOldBalance.toFixed(2)}</td></tr>
-                    ${row.bakeryPaid > 0 ? `<tr style="color:#166534"><td>Paid Today</td><td class="text-right">₹${row.bakeryPaid.toFixed(2)}</td></tr>` : ''}
+                    <tr><td>Bill Subtotal</td><td class="text-right">₹${row.bakerySubtotal.toFixed(2)}</td></tr>
+                    ${row.bakeryCreditApplied > 0 ? `
+                      <tr style="color:#166534"><td>Previous Credit Applied</td><td class="text-right">-₹${row.bakeryCreditApplied.toFixed(2)}</td></tr>
+                      <tr style="font-weight:700"><td>Net Payable</td><td class="text-right">₹${Math.max(0, row.bakerySubtotal - row.bakeryCreditApplied).toFixed(2)}</td></tr>
+                    ` : ''}
+                    ${row.bakeryOldBalance > 0 ? `<tr><td>Previous Balance</td><td class="text-right">₹${row.bakeryOldBalance.toFixed(2)}</td></tr>` : ''}
+                    ${row.bakeryReceived > 0 ? (row.bakeryExcess > 0 ? `
+                      <tr><td>Amount Received</td><td class="text-right">₹${row.bakeryReceived.toFixed(2)}</td></tr>
+                      <tr style="color:#166534"><td>Applied to Bill</td><td class="text-right">₹${row.bakeryPaid.toFixed(2)}</td></tr>
+                      <tr style="color:#b45309;font-weight:700"><td>Client Credit Created</td><td class="text-right">+₹${row.bakeryExcess.toFixed(2)}</td></tr>
+                    ` : `<tr style="color:#166534"><td>Paid Today</td><td class="text-right">₹${row.bakeryReceived.toFixed(2)}</td></tr>`) : ''}
                     <tr class="div-outstanding"><td>Outstanding</td><td class="text-right">₹${Math.max(0, row.bakeryOutstanding).toFixed(2)}</td></tr>
                   </table>
                 </div>
@@ -663,18 +720,49 @@ export default function DailyBillingPage() {
                       </div>
                       <div className="p-4 flex flex-col gap-2">
                         <div className="flex justify-between text-sm">
-                          <span className="font-semibold text-[var(--color-text-muted)]">Subtotal</span>
+                          <span className="font-semibold text-[var(--color-text-muted)]">Bill Subtotal</span>
                           <span className="font-bold text-[var(--color-text-main)]">{formatCurrency(viewBillRow.primarySubtotal)}</span>
                         </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="font-semibold text-[var(--color-text-muted)]">Previous Balance</span>
-                          <span className="font-bold text-[var(--color-text-main)]">{formatCurrency(viewBillRow.primaryOldBalance)}</span>
-                        </div>
-                        {viewBillRow.primaryPaid > 0 && (
+                        {viewBillRow.primaryCreditApplied > 0 && (
+                          <>
+                            <div className="flex justify-between text-sm">
+                              <span className="font-semibold text-green-600 dark:text-green-400">Previous Credit Applied</span>
+                              <span className="font-bold text-green-600 dark:text-green-400">-{formatCurrency(viewBillRow.primaryCreditApplied)}</span>
+                            </div>
+                            <div className="flex justify-between text-sm">
+                              <span className="font-bold text-[var(--color-text-main)]">Net Payable</span>
+                              <span className="font-bold text-[var(--color-text-main)]">{formatCurrency(Math.max(0, viewBillRow.primarySubtotal - viewBillRow.primaryCreditApplied))}</span>
+                            </div>
+                          </>
+                        )}
+                        {viewBillRow.primaryOldBalance > 0 && (
                           <div className="flex justify-between text-sm">
-                            <span className="font-semibold text-green-600 dark:text-green-400">Paid Today</span>
-                            <span className="font-bold text-green-600 dark:text-green-400">{formatCurrency(viewBillRow.primaryPaid)}</span>
+                            <span className="font-semibold text-[var(--color-text-muted)]">Previous Balance</span>
+                            <span className="font-bold text-[var(--color-text-main)]">{formatCurrency(viewBillRow.primaryOldBalance)}</span>
                           </div>
+                        )}
+                        {viewBillRow.primaryReceived > 0 && (
+                          viewBillRow.primaryExcess > 0 ? (
+                            <>
+                              <div className="flex justify-between text-sm">
+                                <span className="font-semibold text-[var(--color-text-muted)]">Amount Received</span>
+                                <span className="font-bold text-[var(--color-text-main)]">{formatCurrency(viewBillRow.primaryReceived)}</span>
+                              </div>
+                              <div className="flex justify-between text-sm">
+                                <span className="font-semibold text-green-600 dark:text-green-400">Applied to Bill</span>
+                                <span className="font-bold text-green-600 dark:text-green-400">{formatCurrency(viewBillRow.primaryPaid)}</span>
+                              </div>
+                              <div className="flex justify-between text-sm">
+                                <span className="font-bold text-blue-600 dark:text-blue-400">Client Credit Created</span>
+                                <span className="font-bold text-blue-600 dark:text-blue-400">+{formatCurrency(viewBillRow.primaryExcess)}</span>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="flex justify-between text-sm">
+                              <span className="font-semibold text-green-600 dark:text-green-400">Paid Today</span>
+                              <span className="font-bold text-green-600 dark:text-green-400">{formatCurrency(viewBillRow.primaryReceived)}</span>
+                            </div>
+                          )
                         )}
                         <div className="flex justify-between text-sm pt-1 border-t border-blue-100 dark:border-blue-900/30">
                           <span className="font-black text-blue-700 dark:text-blue-400 uppercase text-xs tracking-wider">Outstanding</span>
@@ -692,18 +780,49 @@ export default function DailyBillingPage() {
                       </div>
                       <div className="p-4 flex flex-col gap-2">
                         <div className="flex justify-between text-sm">
-                          <span className="font-semibold text-[var(--color-text-muted)]">Subtotal</span>
+                          <span className="font-semibold text-[var(--color-text-muted)]">Bill Subtotal</span>
                           <span className="font-bold text-[var(--color-text-main)]">{formatCurrency(viewBillRow.bakerySubtotal)}</span>
                         </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="font-semibold text-[var(--color-text-muted)]">Previous Balance</span>
-                          <span className="font-bold text-[var(--color-text-main)]">{formatCurrency(viewBillRow.bakeryOldBalance)}</span>
-                        </div>
-                        {viewBillRow.bakeryPaid > 0 && (
+                        {viewBillRow.bakeryCreditApplied > 0 && (
+                          <>
+                            <div className="flex justify-between text-sm">
+                              <span className="font-semibold text-green-600 dark:text-green-400">Previous Credit Applied</span>
+                              <span className="font-bold text-green-600 dark:text-green-400">-{formatCurrency(viewBillRow.bakeryCreditApplied)}</span>
+                            </div>
+                            <div className="flex justify-between text-sm">
+                              <span className="font-bold text-[var(--color-text-main)]">Net Payable</span>
+                              <span className="font-bold text-[var(--color-text-main)]">{formatCurrency(Math.max(0, viewBillRow.bakerySubtotal - viewBillRow.bakeryCreditApplied))}</span>
+                            </div>
+                          </>
+                        )}
+                        {viewBillRow.bakeryOldBalance > 0 && (
                           <div className="flex justify-between text-sm">
-                            <span className="font-semibold text-green-600 dark:text-green-400">Paid Today</span>
-                            <span className="font-bold text-green-600 dark:text-green-400">{formatCurrency(viewBillRow.bakeryPaid)}</span>
+                            <span className="font-semibold text-[var(--color-text-muted)]">Previous Balance</span>
+                            <span className="font-bold text-[var(--color-text-main)]">{formatCurrency(viewBillRow.bakeryOldBalance)}</span>
                           </div>
+                        )}
+                        {viewBillRow.bakeryReceived > 0 && (
+                          viewBillRow.bakeryExcess > 0 ? (
+                            <>
+                              <div className="flex justify-between text-sm">
+                                <span className="font-semibold text-[var(--color-text-muted)]">Amount Received</span>
+                                <span className="font-bold text-[var(--color-text-main)]">{formatCurrency(viewBillRow.bakeryReceived)}</span>
+                              </div>
+                              <div className="flex justify-between text-sm">
+                                <span className="font-semibold text-green-600 dark:text-green-400">Applied to Bill</span>
+                                <span className="font-bold text-green-600 dark:text-green-400">{formatCurrency(viewBillRow.bakeryPaid)}</span>
+                              </div>
+                              <div className="flex justify-between text-sm">
+                                <span className="font-bold text-amber-600 dark:text-amber-400">Client Credit Created</span>
+                                <span className="font-bold text-amber-600 dark:text-amber-400">+{formatCurrency(viewBillRow.bakeryExcess)}</span>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="flex justify-between text-sm">
+                              <span className="font-semibold text-green-600 dark:text-green-400">Paid Today</span>
+                              <span className="font-bold text-green-600 dark:text-green-400">{formatCurrency(viewBillRow.bakeryReceived)}</span>
+                            </div>
+                          )
                         )}
                         <div className="flex justify-between text-sm pt-1 border-t border-amber-100 dark:border-amber-900/30">
                           <span className="font-black text-amber-700 dark:text-amber-400 uppercase text-xs tracking-wider">Outstanding</span>
@@ -775,8 +894,10 @@ export default function DailyBillingPage() {
           const cfg = divConfig[div];
           const ds  = divPaymentState[div];
           const entered = parseFloat(ds.amount) || 0;
+          const isDirect = paymentModalRow.clientId === 'direct';
           const remaining = Math.max(0, cfg.outstanding - entered);
-          const overLimit = entered > cfg.outstanding + 0.01;
+          const excessCredit = !isDirect && entered > cfg.outstanding ? (entered - cfg.outstanding) : 0;
+          const overLimit = isDirect && entered > cfg.outstanding + 0.01;
 
           return (
             <div className="space-y-3">
@@ -808,7 +929,13 @@ export default function DailyBillingPage() {
                   className={`${inputClass} ${overLimit ? 'border-red-400 focus:border-red-400' : ''}`}
                   autoFocus={div === activePaymentDiv}
                 />
-                {overLimit && <p className="text-[11px] font-semibold text-red-500 mt-1">Exceeds outstanding of {formatCurrency(cfg.outstanding)}</p>}
+                {overLimit && <p className="text-[11px] font-semibold text-red-500 mt-1">Exceeds direct sale total of {formatCurrency(cfg.outstanding)}</p>}
+                {excessCredit > 0 && (
+                  <div className="mt-1.5 p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-[11px] text-emerald-800 dark:text-emerald-300 font-semibold flex items-center justify-between">
+                    <span>Advance credit created:</span>
+                    <span className="font-bold">+{formatCurrency(excessCredit)}</span>
+                  </div>
+                )}
               </div>
 
               {/* Method */}

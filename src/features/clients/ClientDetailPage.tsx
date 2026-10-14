@@ -107,6 +107,11 @@ export default function ClientDetailPage() {
         description: l.description || (isOpening ? 'Opening Balance' : isPayment ? `Payment received (${l.paymentMethod?.replace('_', ' ')})` : 'Daily Bill'),
         debit: (isInvoice || isOpening) ? (l.amount || 0) : 0,
         credit: isPayment ? (l.amount || 0) : 0,
+        division: l.division,
+        excessCredit: l.excessCredit,
+        creditApplied: l.creditApplied,
+        appliedAmount: l.appliedAmount,
+        isAdvance: l.isAdvance,
       };
     });
 
@@ -175,7 +180,9 @@ export default function ClientDetailPage() {
   const totalDebit = metrics.totalInvoiced;
   const totalCredit = metrics.totalPaid;
   const openingBal = metrics.openingBalance || 0;
-  const balance = metrics.outstanding;
+  const outstanding = metrics.outstanding;
+  const availableCredit = metrics.credit;
+  const rawBalance = metrics.rawBalance;
 
   // --- Payments Tab ---
   const clientPayments = payments.filter(p => {
@@ -184,7 +191,7 @@ export default function ClientDetailPage() {
     return true;
   });
   const totalCollected = totalCredit;
-  const totalPending = balance;
+  const totalPending = outstanding;
 
   const handleSavePaymentEdit = async () => {
     if (!editingPayment) return;
@@ -505,7 +512,7 @@ export default function ClientDetailPage() {
       {/* ─── TAB: LEDGER ─── */}
       {activeTab === 'ledger' && (
         <div className="animate-in fade-in slide-in-from-bottom-4 duration-300 space-y-6">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
             <Card className="flex flex-col justify-between">
               <div className="flex items-center gap-2 mb-4">
                 <div className="w-8 h-8 rounded-full bg-amber-500/10 flex items-center justify-center">
@@ -534,18 +541,44 @@ export default function ClientDetailPage() {
               <p className="text-xl font-semibold text-[var(--color-success)] tracking-tight">{formatCurrency(totalCredit)}</p>
             </Card>
             <Card className="flex flex-col justify-between relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-[var(--color-primary)]/5 rounded-full blur-2xl -translate-y-1/2 translate-x-1/3" />
               <div className="flex items-center gap-2 mb-4 relative">
-                <p className="text-xs font-bold text-[var(--color-text-muted)]">
-                  {balance > 0 ? 'Outstanding Balance' : balance < 0 ? 'Advance Credit' : 'Current Balance'}
-                </p>
+                <div className="w-8 h-8 rounded-full bg-amber-500/10 flex items-center justify-center">
+                  <Clock className="w-4 h-4 text-amber-600" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-[var(--color-text-muted)]">Outstanding Due</p>
+                  {activeDivision === 'all' && (
+                    <p className="text-[10px] text-gray-400">P: {formatCurrency(metrics.primaryOutstanding)} · B: {formatCurrency(metrics.bakeryOutstanding)}</p>
+                  )}
+                </div>
               </div>
               <div className="relative">
-                <p className={`text-2xl font-semibold tracking-tight ${balance > 0 ? 'text-amber-600 dark:text-amber-400' : balance < 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-[var(--color-text-main)]'}`}>
-                  {formatCurrency(Math.abs(balance))}
+                <p className="text-xl font-semibold tracking-tight text-amber-600 dark:text-amber-400">
+                  {formatCurrency(outstanding)}
                 </p>
-                <Badge variant={balance > 0 ? 'warning' : balance < 0 ? 'success' : 'gray'} className="mt-2 relative z-10">
-                  {balance > 0 ? 'Receivable' : balance < 0 ? 'Advance Credit' : 'Settled'}
+                <Badge variant={outstanding > 0 ? 'warning' : 'gray'} className="mt-2 relative z-10">
+                  {outstanding > 0 ? 'Receivable' : 'Settled'}
+                </Badge>
+              </div>
+            </Card>
+            <Card className="flex flex-col justify-between relative overflow-hidden">
+              <div className="flex items-center gap-2 mb-4 relative">
+                <div className="w-8 h-8 rounded-full bg-emerald-500/10 flex items-center justify-center">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-[var(--color-text-muted)]">Available Credit</p>
+                  {activeDivision === 'all' && (
+                    <p className="text-[10px] text-gray-400">P: {formatCurrency(metrics.primaryCredit)} · B: {formatCurrency(metrics.bakeryCredit)}</p>
+                  )}
+                </div>
+              </div>
+              <div className="relative">
+                <p className="text-xl font-semibold tracking-tight text-emerald-600 dark:text-emerald-400">
+                  {formatCurrency(availableCredit)}
+                </p>
+                <Badge variant={availableCredit > 0 ? 'success' : 'gray'} className="mt-2 relative z-10">
+                  {availableCredit > 0 ? 'Advance Credit' : 'No Credit'}
                 </Badge>
               </div>
             </Card>
@@ -577,7 +610,26 @@ export default function ClientDetailPage() {
                             {entry.type === 'invoice' ? 'Invoice' : entry.type === 'opening_balance' ? 'Opening Balance' : 'Payment'}
                           </Badge>
                         </td>
-                        <td className="px-6 py-4"><p className="text-sm font-medium text-[var(--color-text-main)] max-w-[200px] truncate">{entry.description}</p></td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="text-sm font-medium text-[var(--color-text-main)] max-w-[200px] truncate">{entry.description}</p>
+                            {entry.division && entry.division !== 'all' && (
+                              <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${entry.division === 'bakery' ? 'bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300' : 'bg-blue-100 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300'}`}>
+                                {entry.division === 'bakery' ? 'Bakery' : 'Primary'}
+                              </span>
+                            )}
+                          </div>
+                          {entry.excessCredit && entry.excessCredit > 0 ? (
+                            <p className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 mt-0.5">
+                              Advance Credit Created: +{formatCurrency(entry.excessCredit)}
+                            </p>
+                          ) : null}
+                          {entry.creditApplied && entry.creditApplied > 0 ? (
+                            <p className="text-[10px] font-semibold text-purple-600 dark:text-purple-400 mt-0.5">
+                              Previous Credit Applied: -{formatCurrency(entry.creditApplied)}
+                            </p>
+                          ) : null}
+                        </td>
                         <td className="px-6 py-4 text-right">{entry.debit > 0 ? <span className="text-sm font-semibold text-[var(--color-text-main)]">{formatCurrency(entry.debit)}</span> : <span className="text-gray-300 dark:text-gray-700">—</span>}</td>
                         <td className="px-6 py-4 text-right">{entry.credit > 0 ? <span className="text-sm font-semibold text-[var(--color-success)]">{formatCurrency(entry.credit)}</span> : <span className="text-gray-300 dark:text-gray-700">—</span>}</td>
                         <td className="px-6 py-4 text-right">
@@ -603,7 +655,7 @@ export default function ClientDetailPage() {
       {/* ─── TAB: PAYMENTS ─── */}
       {activeTab === 'payments' && (
         <div className="animate-in fade-in slide-in-from-bottom-4 duration-300 space-y-6">
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <Card className="flex flex-col justify-between">
               <div className="w-10 h-10 rounded-full bg-[var(--color-success-bg)] flex items-center justify-center mb-4">
                 <CheckCircle2 className="w-5 h-5 text-[var(--color-success)]" />
@@ -614,20 +666,29 @@ export default function ClientDetailPage() {
               </div>
             </Card>
             <Card className="flex flex-col justify-between">
-              <div className={`w-10 h-10 rounded-full flex items-center justify-center mb-4 ${totalPending > 0 ? 'bg-amber-100 dark:bg-amber-900/30' : 'bg-green-100 dark:bg-green-900/30'}`}>
-                {totalPending > 0 ? (
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center mb-4 ${outstanding > 0 ? 'bg-amber-100 dark:bg-amber-900/30' : 'bg-green-100 dark:bg-green-900/30'}`}>
+                {outstanding > 0 ? (
                   <Clock className="w-5 h-5 text-amber-600 dark:text-amber-400" />
                 ) : (
                   <CheckCircle2 className="w-5 h-5 text-green-600 dark:text-green-400" />
                 )}
               </div>
               <div>
-                <p className={`text-2xl font-semibold tracking-tight mb-1 ${totalPending > 0 ? 'text-amber-600 dark:text-amber-400' : totalPending < 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400 dark:text-gray-500'}`}>
-                  {formatCurrency(Math.abs(totalPending))}
+                <p className={`text-2xl font-semibold tracking-tight mb-1 ${outstanding > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-gray-400 dark:text-gray-500'}`}>
+                  {formatCurrency(outstanding)}
                 </p>
-                <p className="text-sm font-medium text-[var(--color-text-muted)]">
-                  {totalPending > 0 ? 'Pending' : totalPending < 0 ? 'Advance Credit' : 'Pending'}
+                <p className="text-sm font-medium text-[var(--color-text-muted)]">Outstanding Due</p>
+              </div>
+            </Card>
+            <Card className="flex flex-col justify-between">
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center mb-4 ${availableCredit > 0 ? 'bg-emerald-100 dark:bg-emerald-900/30' : 'bg-gray-100 dark:bg-gray-800'}`}>
+                <Wallet className={`w-5 h-5 ${availableCredit > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400'}`} />
+              </div>
+              <div>
+                <p className={`text-2xl font-semibold tracking-tight mb-1 ${availableCredit > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400 dark:text-gray-500'}`}>
+                  {formatCurrency(availableCredit)}
                 </p>
+                <p className="text-sm font-medium text-[var(--color-text-muted)]">Available Credit</p>
               </div>
             </Card>
             <Card className="flex flex-col justify-between">
@@ -669,10 +730,27 @@ export default function ClientDetailPage() {
                                 <Icon className="w-3.5 h-3.5 text-gray-500" />
                               </div>
                               <span className="text-sm font-medium text-gray-600 dark:text-gray-300">{methodLabel[p.method]}</span>
+                              {p.isAdvance && (
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/30 px-1.5 py-0.5 rounded">
+                                  Advance
+                                </span>
+                              )}
                             </div>
                           </td>
                           <td className="px-6 py-4">{p.reference ? <span className="font-mono text-[10px] font-medium text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded-md">{p.reference}</span> : <span className="text-gray-300 dark:text-gray-700">—</span>}</td>
-                          <td className="px-6 py-4"><span className="text-sm font-semibold text-[var(--color-text-main)]">{formatCurrency(p.amount)}</span></td>
+                          <td className="px-6 py-4">
+                            <span className="text-sm font-semibold text-[var(--color-text-main)]">{formatCurrency(p.amount)}</span>
+                            {p.excessCredit && p.excessCredit > 0 ? (
+                              <p className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 mt-0.5">
+                                Credit created: +{formatCurrency(p.excessCredit)}
+                              </p>
+                            ) : null}
+                            {p.appliedAmount !== undefined && p.appliedAmount < p.amount && (
+                              <p className="text-[10px] text-gray-400 mt-0.5">
+                                Applied to bill: {formatCurrency(p.appliedAmount)}
+                              </p>
+                            )}
+                          </td>
                           <td className="px-6 py-4"><span className="text-xs font-medium text-gray-500">{format(new Date(p.createdAt), 'MMM d, yyyy h:mm a')}</span></td>
                           <td className="px-6 py-4">
                             {isAdmin && (

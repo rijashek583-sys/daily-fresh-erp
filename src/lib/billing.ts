@@ -58,73 +58,141 @@ export function calculatePaymentsOnDate(clientId: string, date: string, division
 export function getClientMetrics(clientId: string, division: FilterDivision) {
   const { ledger, orders, payments, clients } = useDataStore.getState();
   
-  const clientLedger = ledger.filter(l => {
-    if (l.clientId !== clientId) return false;
-    if (division !== 'all') {
-      const entryDiv = l.division;
-      if (entryDiv && entryDiv !== 'all' && entryDiv !== division) return false;
-    }
-    return true;
-  });
+  const allClientLedger = ledger.filter(l => l.clientId === clientId);
 
-  if (clientLedger.length > 0) {
-    const openingBalance = clientLedger.filter(l => l.type === 'opening_balance').reduce((sum, l) => sum + (l.amount || 0), 0);
-    const totalInvoiced = clientLedger.filter(l => l.type === 'invoice').reduce((sum, l) => sum + (l.amount || 0), 0);
-    const totalPaid = clientLedger.filter(l => l.type === 'payment').reduce((sum, l) => sum + (l.amount || 0), 0);
-    const totalOrders = clientLedger.filter(l => l.type === 'invoice').length;
-    const balance = (openingBalance + totalInvoiced) - totalPaid;
+  if (allClientLedger.length > 0) {
+    const primaryEntries = allClientLedger.filter(l => l.division !== 'bakery');
+    const bakeryEntries = allClientLedger.filter(l => l.division === 'bakery');
+
+    const primaryOpening = primaryEntries.filter(l => l.type === 'opening_balance').reduce((sum, l) => sum + (l.amount || 0), 0);
+    const primaryInvoiced = primaryEntries.filter(l => l.type === 'invoice').reduce((sum, l) => sum + (l.amount || 0), 0);
+    const primaryPaid = primaryEntries.filter(l => l.type === 'payment').reduce((sum, l) => sum + (l.amount || 0), 0);
+    const primaryOrders = primaryEntries.filter(l => l.type === 'invoice').length;
+    const primaryRawBalance = (primaryOpening + primaryInvoiced) - primaryPaid;
+    const primaryOutstanding = Math.max(0, primaryRawBalance);
+    const primaryCredit = primaryRawBalance < 0 ? Math.abs(primaryRawBalance) : 0;
+
+    const bakeryOpening = bakeryEntries.filter(l => l.type === 'opening_balance').reduce((sum, l) => sum + (l.amount || 0), 0);
+    const bakeryInvoiced = bakeryEntries.filter(l => l.type === 'invoice').reduce((sum, l) => sum + (l.amount || 0), 0);
+    const bakeryPaid = bakeryEntries.filter(l => l.type === 'payment').reduce((sum, l) => sum + (l.amount || 0), 0);
+    const bakeryOrders = bakeryEntries.filter(l => l.type === 'invoice').length;
+    const bakeryRawBalance = (bakeryOpening + bakeryInvoiced) - bakeryPaid;
+    const bakeryOutstanding = Math.max(0, bakeryRawBalance);
+    const bakeryCredit = bakeryRawBalance < 0 ? Math.abs(bakeryRawBalance) : 0;
+
+    let openingBalance = primaryOpening + bakeryOpening;
+    let totalInvoiced = primaryInvoiced + bakeryInvoiced;
+    let totalPaid = primaryPaid + bakeryPaid;
+    let totalOrders = primaryOrders + bakeryOrders;
+    let rawBalance = primaryRawBalance + bakeryRawBalance;
+    let outstanding = primaryOutstanding + bakeryOutstanding;
+    let credit = primaryCredit + bakeryCredit;
+
+    if (division === 'primary') {
+      openingBalance = primaryOpening;
+      totalInvoiced = primaryInvoiced;
+      totalPaid = primaryPaid;
+      totalOrders = primaryOrders;
+      rawBalance = primaryRawBalance;
+      outstanding = primaryOutstanding;
+      credit = primaryCredit;
+    } else if (division === 'bakery') {
+      openingBalance = bakeryOpening;
+      totalInvoiced = bakeryInvoiced;
+      totalPaid = bakeryPaid;
+      totalOrders = bakeryOrders;
+      rawBalance = bakeryRawBalance;
+      outstanding = bakeryOutstanding;
+      credit = bakeryCredit;
+    }
 
     return {
       openingBalance,
       totalInvoiced,
       totalPaid,
-      outstanding: balance,
-      receivable: Math.max(0, balance),
-      credit: balance < 0 ? Math.abs(balance) : 0,
-      totalOrders
+      outstanding,
+      rawBalance,
+      receivable: outstanding,
+      credit,
+      totalOrders,
+      primaryOutstanding,
+      bakeryOutstanding,
+      primaryCredit,
+      bakeryCredit,
+      primaryRawBalance,
+      bakeryRawBalance,
     };
   }
 
   // Fallback if ledger entries are not yet populated for this client:
   const client = clients?.find(c => c.id === clientId);
-  let openingBalance = 0;
-  if (client) {
-    if (division === 'bakery') {
-      openingBalance = client.bakeryTotals?.openingBalance || (client.openingBalance?.division === 'bakery' ? client.openingBalance.amount : 0);
-    } else if (division === 'primary') {
-      openingBalance = client.primaryTotals?.openingBalance || (client.openingBalance?.division !== 'bakery' ? (client.openingBalance?.amount || client.openingBalanceAmount || 0) : 0);
-    } else {
-      openingBalance = client.openingBalance?.amount ?? client.openingBalanceAmount ?? 0;
-    }
+  const primaryOpening = client?.primaryTotals?.openingBalance || (client?.openingBalance?.division !== 'bakery' ? (client?.openingBalance?.amount || client?.openingBalanceAmount || 0) : 0);
+  const bakeryOpening = client?.bakeryTotals?.openingBalance || (client?.openingBalance?.division === 'bakery' ? client?.openingBalance?.amount || 0 : 0);
+
+  const clientOrders = orders.filter(o => o.clientId === clientId);
+  const clientPayments = payments.filter(p => p.clientId === clientId && !p.deletedAt);
+
+  const primaryOrdersList = clientOrders.filter(o => o.division !== 'bakery');
+  const bakeryOrdersList = clientOrders.filter(o => o.division === 'bakery');
+
+  const primaryInvoiced = primaryOrdersList.reduce((sum, o) => sum + (o.total || 0), 0);
+  const bakeryInvoiced = bakeryOrdersList.reduce((sum, o) => sum + (o.total || 0), 0);
+
+  const primaryPaymentsList = clientPayments.filter(p => p.division !== 'bakery');
+  const bakeryPaymentsList = clientPayments.filter(p => p.division === 'bakery');
+
+  const primaryPaid = primaryPaymentsList.reduce((sum, p) => sum + (p.amount || 0), 0);
+  const bakeryPaid = bakeryPaymentsList.reduce((sum, p) => sum + (p.amount || 0), 0);
+
+  const primaryRawBalance = (primaryOpening + primaryInvoiced) - primaryPaid;
+  const primaryOutstanding = Math.max(0, primaryRawBalance);
+  const primaryCredit = primaryRawBalance < 0 ? Math.abs(primaryRawBalance) : 0;
+
+  const bakeryRawBalance = (bakeryOpening + bakeryInvoiced) - bakeryPaid;
+  const bakeryOutstanding = Math.max(0, bakeryRawBalance);
+  const bakeryCredit = bakeryRawBalance < 0 ? Math.abs(bakeryRawBalance) : 0;
+
+  let openingBalance = primaryOpening + bakeryOpening;
+  let totalInvoiced = primaryInvoiced + bakeryInvoiced;
+  let totalPaid = primaryPaid + bakeryPaid;
+  let totalOrders = clientOrders.length;
+  let rawBalance = primaryRawBalance + bakeryRawBalance;
+  let outstanding = primaryOutstanding + bakeryOutstanding;
+  let credit = primaryCredit + bakeryCredit;
+
+  if (division === 'primary') {
+    openingBalance = primaryOpening;
+    totalInvoiced = primaryInvoiced;
+    totalPaid = primaryPaid;
+    totalOrders = primaryOrdersList.length;
+    rawBalance = primaryRawBalance;
+    outstanding = primaryOutstanding;
+    credit = primaryCredit;
+  } else if (division === 'bakery') {
+    openingBalance = bakeryOpening;
+    totalInvoiced = bakeryInvoiced;
+    totalPaid = bakeryPaid;
+    totalOrders = bakeryOrdersList.length;
+    rawBalance = bakeryRawBalance;
+    outstanding = bakeryOutstanding;
+    credit = bakeryCredit;
   }
-
-  const clientOrders = orders.filter(o => {
-    if (o.clientId !== clientId) return false;
-    if (division !== 'all') {
-      return (o.division as any) === 'all' || !o.division || o.division === division;
-    }
-    return true;
-  });
-  const clientPayments = payments.filter(p => {
-    if (p.clientId !== clientId || p.deletedAt) return false;
-    if (division !== 'all') {
-      return (p.division as any) === 'all' || !p.division || p.division === division;
-    }
-    return true;
-  });
-
-  const totalInvoiced = clientOrders.reduce((sum, o) => sum + (o.total || 0), 0);
-  const totalPaid = clientPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
-  const balance = (openingBalance + totalInvoiced) - totalPaid;
 
   return {
     openingBalance,
     totalInvoiced,
     totalPaid,
-    outstanding: balance,
-    receivable: Math.max(0, balance),
-    credit: balance < 0 ? Math.abs(balance) : 0,
-    totalOrders: clientOrders.length
+    outstanding,
+    rawBalance,
+    receivable: outstanding,
+    credit,
+    totalOrders,
+    primaryOutstanding,
+    bakeryOutstanding,
+    primaryCredit,
+    bakeryCredit,
+    primaryRawBalance,
+    bakeryRawBalance,
   };
 }
 
@@ -133,12 +201,15 @@ export function getClientOutstanding(clientId: string, division: FilterDivision)
 }
 
 export function getClientReceivable(clientId: string, division: FilterDivision): number {
-  return Math.max(0, getClientMetrics(clientId, division).outstanding);
+  return getClientMetrics(clientId, division).outstanding;
 }
 
 export function getClientCredit(clientId: string, division: FilterDivision): number {
-  const bal = getClientMetrics(clientId, division).outstanding;
-  return bal < 0 ? Math.abs(bal) : 0;
+  return getClientMetrics(clientId, division).credit;
+}
+
+export function getClientRawBalance(clientId: string, division: FilterDivision): number {
+  return getClientMetrics(clientId, division).rawBalance;
 }
 
 export async function recordPayment(paymentData: any) {
@@ -226,10 +297,12 @@ export function getPendingCollections(
     // Composite key ensures bakery payments strictly subtract from bakery invoices
     const key = `${l.invoiceId}:${l.division || 'all'}`;
     const existing = paymentsByKey.get(key) || 0;
-    paymentsByKey.set(key, existing + (l.amount || 0));
+    const applied = l.appliedAmount !== undefined ? l.appliedAmount : (l.amount || 0);
+    paymentsByKey.set(key, existing + applied);
   });
 
   // Step 3: Build temporary rows per invoice entry
+  const { orders } = useDataStore.getState();
   const clientMap = new Map(clients.map(c => [c.id, c.name]));
   const tempRows: PendingCollectionRow[] = [];
   let totalInvoiced = 0;
@@ -239,10 +312,19 @@ export function getPendingCollections(
     const invoiceAmount = entry.amount || 0;
     const pKey = `${entry.invoiceId}:${entry.division || 'all'}`;
     const paidAmount = entry.invoiceId ? (paymentsByKey.get(pKey) || 0) : 0;
-    const pendingAmount = invoiceAmount - paidAmount;
+    const order = entry.invoiceId ? orders.find(o => o.id === entry.invoiceId) : null;
+    const creditApplied = order
+      ? (entry.division === 'bakery'
+          ? (order.bakeryCreditApplied || 0)
+          : entry.division === 'primary'
+            ? (order.primaryCreditApplied || 0)
+            : (order.creditApplied || 0))
+      : 0;
+
+    const pendingAmount = Math.max(0, invoiceAmount - creditApplied - paidAmount);
 
     totalInvoiced += invoiceAmount;
-    totalPaid += paidAmount;
+    totalPaid += (paidAmount + creditApplied);
 
     // Only keep rows with remaining balance
     if (pendingAmount <= 0) continue;

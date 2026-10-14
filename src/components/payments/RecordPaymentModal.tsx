@@ -64,21 +64,30 @@ export default function RecordPaymentModal({
   }, [order, payments]);
 
   const orderPaidTotal = useMemo(() => {
-    return orderPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+    return orderPayments.reduce((sum, p) => sum + (p.appliedAmount !== undefined ? p.appliedAmount : (p.amount || 0)), 0);
   }, [orderPayments]);
+
+  const orderCreditApplied = useMemo(() => {
+    return order?.creditApplied || 0;
+  }, [order]);
+
+  const orderNetDue = useMemo(() => {
+    if (!order) return 0;
+    return Math.max(0, (order.total || 0) - orderCreditApplied);
+  }, [order, orderCreditApplied]);
 
   const orderPendingTotal = useMemo(() => {
     if (!order) return 0;
-    return Math.max(0, (order.total || 0) - orderPaidTotal);
-  }, [order, orderPaidTotal]);
+    return Math.max(0, orderNetDue - orderPaidTotal);
+  }, [order, orderNetDue, orderPaidTotal]);
 
   // Client metrics if not paying against a specific order
   const clientMetrics = useMemo(() => {
-    if (!resolvedClient) return { outstanding: 0 };
+    if (!resolvedClient) return { outstanding: 0, credit: 0 };
     return getClientMetrics(resolvedClient.id, 'all');
   }, [resolvedClient]);
 
-  // Maximum allowed payment amount
+  // Maximum standard pending amount
   const maxAllowedAmount = useMemo(() => {
     if (order) return orderPendingTotal;
     return Math.max(0, clientMetrics.outstanding);
@@ -115,6 +124,19 @@ export default function RecordPaymentModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>('');
 
+  const parsedAmount = parseFloat(amount) || 0;
+  const appliedToBill = useMemo(() => {
+    if (parsedAmount <= 0) return 0;
+    if (order) return Math.min(parsedAmount, orderPendingTotal);
+    return Math.min(parsedAmount, maxAllowedAmount);
+  }, [parsedAmount, order, orderPendingTotal, maxAllowedAmount]);
+
+  const excessCredit = useMemo(() => {
+    if (parsedAmount <= 0 || isDirectSaleOrder) return 0;
+    if (order) return Math.max(0, parsedAmount - orderPendingTotal);
+    return Math.max(0, parsedAmount - maxAllowedAmount);
+  }, [parsedAmount, isDirectSaleOrder, order, orderPendingTotal, maxAllowedAmount]);
+
   // Prefill when modal opens
   useEffect(() => {
     if (isOpen) {
@@ -143,10 +165,12 @@ export default function RecordPaymentModal({
       return;
     }
 
-    // Validation: prevent payment greater than pending amount
-    if (maxAllowedAmount > 0 && numericAmount > maxAllowedAmount + 0.01) {
+    const isDirect = resolvedClient.id === 'direct' || isDirectSaleOrder;
+
+    // Validation: prevent overpayment for direct sales only (direct sales cannot hold credit)
+    if (isDirect && maxAllowedAmount > 0 && numericAmount > maxAllowedAmount + 0.01) {
       setError(
-        `Payment amount (₹${numericAmount}) cannot exceed the remaining pending amount of ${formatCurrency(
+        `Direct sale payment amount (₹${numericAmount}) cannot exceed the pending amount of ${formatCurrency(
           maxAllowedAmount
         )}.`
       );
@@ -254,13 +278,21 @@ export default function RecordPaymentModal({
             </div>
 
             {/* Financial figures */}
-            <div className="grid grid-cols-3 gap-2 pt-2 border-t border-gray-200/60 dark:border-gray-700/60 text-center">
+            <div className={`grid ${orderCreditApplied > 0 ? 'grid-cols-4' : 'grid-cols-3'} gap-2 pt-2 border-t border-gray-200/60 dark:border-gray-700/60 text-center`}>
               <div>
                 <p className="text-[10px] font-semibold uppercase text-gray-400">Total</p>
                 <p className="text-xs font-bold text-[var(--color-text-main)]">
                   {formatCurrency(order ? order.total : Math.max(0, clientMetrics.outstanding))}
                 </p>
               </div>
+              {orderCreditApplied > 0 && (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase text-green-600 dark:text-green-400">Credit Applied</p>
+                  <p className="text-xs font-bold text-green-600 dark:text-green-400">
+                    -{formatCurrency(orderCreditApplied)}
+                  </p>
+                </div>
+              )}
               <div>
                 <p className="text-[10px] font-semibold uppercase text-gray-400">Paid So Far</p>
                 <p className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
@@ -268,15 +300,15 @@ export default function RecordPaymentModal({
                 </p>
               </div>
               <div>
-                <p className="text-[10px] font-semibold uppercase text-gray-400">Remaining Pending</p>
+                <p className="text-[10px] font-semibold uppercase text-gray-400">Remaining Due</p>
                 <p className="text-xs font-extrabold text-amber-600 dark:text-amber-400">
                   {formatCurrency(maxAllowedAmount)}
                 </p>
               </div>
             </div>
-            {!order && clientMetrics.outstanding < 0 && (
+            {!order && (clientMetrics.credit || 0) > 0 && (
               <p className="text-center text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 pt-1">
-                Client has an advance credit of {formatCurrency(Math.abs(clientMetrics.outstanding))}.
+                Client has an available advance credit of {formatCurrency(clientMetrics.credit)}.
               </p>
             )}
           </div>
@@ -326,6 +358,24 @@ export default function RecordPaymentModal({
                 className="w-full pl-8 pr-4 py-2.5 text-base font-bold rounded-xl border border-gray-200 dark:border-gray-800 bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] focus:ring-1 focus:ring-[var(--color-primary)] transition-all"
               />
             </div>
+
+            {/* Live payment breakdown if excess credit */}
+            {parsedAmount > 0 && excessCredit > 0 && !isDirectSaleOrder && (
+              <div className="p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-xs space-y-1.5 animate-in fade-in duration-200">
+                <div className="flex justify-between text-gray-600 dark:text-gray-300">
+                  <span>Amount received:</span>
+                  <span className="font-bold text-[var(--color-text-main)]">{formatCurrency(parsedAmount)}</span>
+                </div>
+                <div className="flex justify-between text-gray-600 dark:text-gray-300">
+                  <span>Applied to bill:</span>
+                  <span className="font-bold text-emerald-700 dark:text-emerald-300">{formatCurrency(appliedToBill)}</span>
+                </div>
+                <div className="flex justify-between pt-1 border-t border-emerald-200 dark:border-emerald-800 font-bold text-emerald-800 dark:text-emerald-200">
+                  <span>Advance credit created ({division === 'bakery' ? 'Bakery Foods' : 'Primary Foods'}):</span>
+                  <span>+{formatCurrency(excessCredit)}</span>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Payment Date & Division */}

@@ -145,14 +145,22 @@ export async function verifyAndSyncClientTotals(clientId: string) {
 
     const primaryOpening = primaryTotals.openingBalance || 0;
     const bakeryOpening = bakeryTotals.openingBalance || 0;
-    const primaryOutstanding = primaryOpening + primaryTotals.totalInvoiced - primaryTotals.totalPaid;
-    const bakeryOutstanding = bakeryOpening + bakeryTotals.totalInvoiced - bakeryTotals.totalPaid;
+    const primaryRawBalance = primaryOpening + primaryTotals.totalInvoiced - primaryTotals.totalPaid;
+    const bakeryRawBalance = bakeryOpening + bakeryTotals.totalInvoiced - bakeryTotals.totalPaid;
+
+    const primaryOutstanding = Math.max(0, primaryRawBalance);
+    const primaryCredit = primaryRawBalance < 0 ? Math.abs(primaryRawBalance) : 0;
+
+    const bakeryOutstanding = Math.max(0, bakeryRawBalance);
+    const bakeryCredit = bakeryRawBalance < 0 ? Math.abs(bakeryRawBalance) : 0;
     
     // Cross-division totals for fallback
     const totalOpening = primaryOpening + bakeryOpening;
     const totalInvoiced = primaryTotals.totalInvoiced + bakeryTotals.totalInvoiced;
     const totalPaid = primaryTotals.totalPaid + bakeryTotals.totalPaid;
     const outstanding = primaryOutstanding + bakeryOutstanding;
+    const availableCredit = primaryCredit + bakeryCredit;
+    const rawBalance = primaryRawBalance + bakeryRawBalance;
     const totalOrders = primaryTotals.totalOrders + bakeryTotals.totalOrders;
 
     const clientRef = doc(db, COLLECTIONS.CLIENTS, clientId);
@@ -162,12 +170,19 @@ export async function verifyAndSyncClientTotals(clientId: string) {
       totalRevenue: totalInvoiced,
       totalPaid,
       outstanding,
+      credit: availableCredit,
+      availableCredit,
+      primaryCredit,
+      bakeryCredit,
+      rawBalance,
       totalOrders,
       openingBalanceAmount: totalOpening,
       primaryTotals: {
         totalRevenue: primaryTotals.totalInvoiced,
         totalPaid: primaryTotals.totalPaid,
         outstanding: primaryOutstanding,
+        credit: primaryCredit,
+        rawBalance: primaryRawBalance,
         totalOrders: primaryTotals.totalOrders,
         openingBalance: primaryOpening,
       },
@@ -175,12 +190,14 @@ export async function verifyAndSyncClientTotals(clientId: string) {
         totalRevenue: bakeryTotals.totalInvoiced,
         totalPaid: bakeryTotals.totalPaid,
         outstanding: bakeryOutstanding,
+        credit: bakeryCredit,
+        rawBalance: bakeryRawBalance,
         totalOrders: bakeryTotals.totalOrders,
         openingBalance: bakeryOpening,
       }
     });
     
-    console.log(`[Integrity] Client ${clientId} synced. Opening: ${totalOpening}, Primary Out: ${primaryOutstanding}, Bakery Out: ${bakeryOutstanding}`);
+    console.log(`[Integrity] Client ${clientId} synced. Opening: ${totalOpening}, Primary Out: ${primaryOutstanding} (Credit: ${primaryCredit}), Bakery Out: ${bakeryOutstanding} (Credit: ${bakeryCredit})`);
   } catch (err) {
     console.error(`[Integrity] Failed to sync client ${clientId}:`, err);
   }
@@ -662,9 +679,57 @@ export async function addOrder(orderData: any) {
         if (!clientSnap.exists()) throw new Error("Client not found");
       }
 
-      // 2. Create Order Document
+      // 2. Derive division credit and create Order Document
       const orderRef = doc(collection(db, COLLECTIONS.ORDERS));
       newOrderId = orderRef.id;
+
+      let creditApplied = 0;
+      let primaryCreditApplied = 0;
+      let bakeryCreditApplied = 0;
+
+      if (!isDirectSale && clientSnap) {
+        const clientDoc = clientSnap.data() || {};
+        const pRaw = clientDoc.primaryTotals?.rawBalance !== undefined
+          ? clientDoc.primaryTotals.rawBalance
+          : ((clientDoc.primaryTotals?.openingBalance || 0) + (clientDoc.primaryTotals?.totalRevenue || 0) - (clientDoc.primaryTotals?.totalPaid || 0));
+        const clientPrimaryCredit = clientDoc.primaryTotals?.credit !== undefined
+          ? (clientDoc.primaryTotals.credit || 0)
+          : (pRaw < 0 ? Math.abs(pRaw) : (clientDoc.primaryCredit || 0));
+
+        const bRaw = clientDoc.bakeryTotals?.rawBalance !== undefined
+          ? clientDoc.bakeryTotals.rawBalance
+          : ((clientDoc.bakeryTotals?.openingBalance || 0) + (clientDoc.bakeryTotals?.totalRevenue || 0) - (clientDoc.bakeryTotals?.totalPaid || 0));
+        const clientBakeryCredit = clientDoc.bakeryTotals?.credit !== undefined
+          ? (clientDoc.bakeryTotals.credit || 0)
+          : (bRaw < 0 ? Math.abs(bRaw) : (clientDoc.bakeryCredit || 0));
+
+        if (orderData.division === 'primary') {
+          creditApplied = Math.min(clientPrimaryCredit, total);
+          primaryCreditApplied = creditApplied;
+          bakeryCreditApplied = 0;
+        } else if (orderData.division === 'bakery') {
+          creditApplied = Math.min(clientBakeryCredit, total);
+          primaryCreditApplied = 0;
+          bakeryCreditApplied = creditApplied;
+        } else if (orderData.division === 'all') {
+          const { products } = useDataStore.getState();
+          let pSub = 0;
+          let bSub = 0;
+          (orderData.items || []).forEach((i: any) => {
+            const prod = products.find((p: any) => p.id === i.productId);
+            const div = getProductDivision(prod || { name: i.productName });
+            if (div === 'primary') pSub += i.total;
+            else bSub += i.total;
+          });
+          primaryCreditApplied = Math.min(clientPrimaryCredit, pSub);
+          bakeryCreditApplied = Math.min(clientBakeryCredit, bSub);
+          creditApplied = primaryCreditApplied + bakeryCreditApplied;
+        }
+      }
+
+      const netDue = Math.max(0, total - creditApplied);
+      const paymentStatus = creditApplied >= total ? 'paid' : 'pending';
+
       const oData = {
         ...orderData,
         id: orderRef.id,
@@ -672,6 +737,12 @@ export async function addOrder(orderData: any) {
         clientId: isDirectSale ? 'direct' : clientId,
         clientName: isDirectSale ? 'Direct Sale' : (orderData.clientName || clientSnap?.data()?.name || ''),
         region: isDirectSale ? 'Direct Sale' : (orderData.region || clientSnap?.data()?.region || ''),
+        creditApplied,
+        primaryCreditApplied,
+        bakeryCreditApplied,
+        netDue,
+        paidAmount: 0,
+        paymentStatus,
       };
       transaction.set(orderRef, oData);
 
@@ -918,7 +989,26 @@ export async function updatePayment(paymentId: string, updates: any) {
       const newAmount: number = updates.amount ?? oldAmount;
       const amountDiff = newAmount - oldAmount;
 
-      transaction.update(paymentRef, updates);
+      const paymentUpdates: any = { ...updates };
+
+      if (oldData.invoiceId && updates.amount !== undefined) {
+        const orderRef = doc(db, COLLECTIONS.ORDERS, oldData.invoiceId);
+        const orderSnap = await transaction.get(orderRef);
+        if (orderSnap.exists()) {
+          const oDoc = orderSnap.data();
+          const orderTotal = Number(oDoc.total || 0);
+          const orderCreditApplied = Number(oDoc.creditApplied || 0);
+          const orderNetDue = Math.max(0, orderTotal - orderCreditApplied);
+          
+          const newApplied = Math.min(newAmount, orderNetDue);
+          const newExcess = Math.max(0, newAmount - orderNetDue);
+          paymentUpdates.appliedAmount = newApplied;
+          paymentUpdates.excessCredit = newExcess;
+          paymentUpdates.isAdvance = newExcess > 0;
+        }
+      }
+
+      transaction.update(paymentRef, paymentUpdates);
 
       if ((amountDiff !== 0 || updates.division !== undefined) && oldData.clientId && oldData.clientId !== 'direct') {
         // Keep the ledger credit entry in sync
@@ -932,6 +1022,8 @@ export async function updatePayment(paymentId: string, updates: any) {
           const lUpdates: any = {};
           if (amountDiff !== 0) lUpdates.amount = increment(amountDiff);
           if (updates.division !== undefined) lUpdates.division = updates.division;
+          if (paymentUpdates.appliedAmount !== undefined) lUpdates.appliedAmount = paymentUpdates.appliedAmount;
+          if (paymentUpdates.excessCredit !== undefined) lUpdates.excessCredit = paymentUpdates.excessCredit;
           
           if (Object.keys(lUpdates).length > 0) {
             transaction.update(lDoc.ref, lUpdates);
@@ -983,9 +1075,31 @@ export async function recordPaymentAtomic(paymentData: any) {
     const effectiveStaffId = staffId || currentUser?.uid || null;
     const effectiveStaffName = staffName || paymentData.recordedBy || currentUser?.name || currentUser?.displayName || updatedBy || 'Staff';
 
+    // If paying against an invoice, find existing payments on that invoice first
+    let existingOrderPaid = 0;
+    if (invoiceId) {
+      try {
+        const existingPaymentsSnap = await getDocs(
+          query(collection(db, 'payments'), where('invoiceId', '==', invoiceId))
+        );
+        existingPaymentsSnap.docs.forEach(d => {
+          const p = d.data();
+          if (!p.deletedAt) {
+            existingOrderPaid += (p.appliedAmount !== undefined ? p.appliedAmount : (p.amount || 0));
+          }
+        });
+      } catch (err) {
+        console.warn('Could not read existing payments for invoice:', err);
+      }
+    }
+
     await runTransaction(db, async (transaction) => {
       let resolvedRegion = region || (isDirectSale ? 'Direct Sale' : '');
       let resolvedClientName = clientName || (isDirectSale ? 'Direct Sale' : '');
+
+      let appliedAmount = amount;
+      let excessCredit = 0;
+      let isAdvance = false;
 
       if (!isDirectSale) {
         // 1. Fetch Client
@@ -995,6 +1109,35 @@ export async function recordPaymentAtomic(paymentData: any) {
         const clientDocData = clientSnap.data();
         resolvedRegion = region || clientDocData.region || '';
         resolvedClientName = clientName || clientDocData.name || '';
+
+        if (invoiceId) {
+          const orderRef = doc(db, COLLECTIONS.ORDERS, invoiceId);
+          const orderSnap = await transaction.get(orderRef);
+          if (orderSnap.exists()) {
+            const oDoc = orderSnap.data();
+            const orderTotal = Number(oDoc.total || 0);
+            const orderCreditApplied = Number(oDoc.creditApplied || 0);
+            const orderNetDue = Math.max(0, orderTotal - orderCreditApplied);
+            const orderRemaining = Math.max(0, orderNetDue - existingOrderPaid);
+
+            appliedAmount = Math.min(amount, orderRemaining);
+            excessCredit = Math.max(0, amount - orderRemaining);
+
+            const newPaid = existingOrderPaid + appliedAmount;
+            const newStatus = (newPaid >= orderNetDue) ? 'paid' : (newPaid > 0 ? 'partial' : 'pending');
+
+            transaction.update(orderRef, {
+              paidAmount: newPaid,
+              paymentStatus: newStatus,
+              updatedAt: new Date().toISOString()
+            });
+          }
+        } else {
+          // Advance payment without a specific bill
+          appliedAmount = 0;
+          excessCredit = amount;
+          isAdvance = true;
+        }
       }
       
       // 2. Create Payment Document
@@ -1007,6 +1150,9 @@ export async function recordPaymentAtomic(paymentData: any) {
         region: resolvedRegion,
         invoiceId: invoiceId || null,
         amount,
+        appliedAmount,
+        excessCredit,
+        isAdvance,
         method,
         reference: reference || null,
         notes: notes || null,
@@ -1025,6 +1171,12 @@ export async function recordPaymentAtomic(paymentData: any) {
       // 3. Create Ledger Transaction (Credit) - ONLY FOR CLIENT ORDERS
       if (!isDirectSale) {
         const ledgerRef = doc(collection(db, 'ledger'));
+        const ledgerDesc = invoiceId
+          ? (excessCredit > 0
+              ? `Payment received against bill (${method.replace('_', ' ')}) - Applied: ₹${appliedAmount.toFixed(2)}, Advance Credit: ₹${excessCredit.toFixed(2)}${reference ? ` - Ref: ${reference}` : ''}`
+              : `Payment received (${method.replace('_', ' ')})${reference ? ` - Ref: ${reference}` : ''}`)
+          : `Advance payment received (${method.replace('_', ' ')})${reference ? ` - Ref: ${reference}` : ''}`;
+
         transaction.set(ledgerRef, {
           id: ledgerRef.id,
           type: 'payment',
@@ -1034,9 +1186,12 @@ export async function recordPaymentAtomic(paymentData: any) {
           region: resolvedRegion,
           invoiceId: invoiceId || null,
           amount,
+          appliedAmount,
+          excessCredit,
+          isAdvance,
           paymentDate: pData.createdAt,
           paymentMethod: method,
-          description: `Payment received (${method.replace('_', ' ')})${reference ? ` - Ref: ${reference}` : ''}`,
+          description: ledgerDesc,
           createdAt: new Date().toISOString(),
           billDate: billDate || null,
           division: pData.division,

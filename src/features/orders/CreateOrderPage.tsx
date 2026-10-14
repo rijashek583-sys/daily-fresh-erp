@@ -70,6 +70,27 @@ export default function CreateOrderPage() {
     }, 0);
   }, [orderItems, selectedClient, clientPricing, activeTab]);
 
+  const availableCredit = useMemo(() => {
+    if (!selectedClient) return 0;
+    if (activeTab === 'bakery') {
+      return selectedClient.bakeryTotals?.credit || (selectedClient.bakeryTotals?.rawBalance ? Math.max(0, -selectedClient.bakeryTotals.rawBalance) : (selectedClient.bakeryCredit || 0));
+    }
+    if (activeTab === 'primary') {
+      return selectedClient.primaryTotals?.credit || (selectedClient.primaryTotals?.rawBalance ? Math.max(0, -selectedClient.primaryTotals.rawBalance) : (selectedClient.primaryCredit || 0));
+    }
+    const pCredit = selectedClient.primaryTotals?.credit || (selectedClient.primaryTotals?.rawBalance ? Math.max(0, -selectedClient.primaryTotals.rawBalance) : (selectedClient.primaryCredit || 0));
+    const bCredit = selectedClient.bakeryTotals?.credit || (selectedClient.bakeryTotals?.rawBalance ? Math.max(0, -selectedClient.bakeryTotals.rawBalance) : (selectedClient.bakeryCredit || 0));
+    return pCredit + bCredit;
+  }, [selectedClient, activeTab]);
+
+  const creditToApply = useMemo(() => {
+    return Math.min(availableCredit, totalAmount);
+  }, [availableCredit, totalAmount]);
+
+  const netPayable = useMemo(() => {
+    return Math.max(0, totalAmount - creditToApply);
+  }, [totalAmount, creditToApply]);
+
   const totalItems = Object.values(orderItems).reduce((sum, qty) => sum + (qty || 0), 0);
 
   const handleSave = async () => {
@@ -162,8 +183,17 @@ export default function CreateOrderPage() {
       {selectedClient ? (
         <Card padding={false} className="overflow-hidden relative animate-in fade-in slide-in-from-bottom-4 duration-300">
           <div className="px-6 py-5 border-b border-gray-100 dark:border-white/[0.05] bg-gray-50/50 dark:bg-black/10">
-            <h2 className="text-base font-bold text-[var(--color-text-main)]">Products — {activeTab === 'all' ? 'All Divisions' : (activeTab === 'primary' ? 'Primary Foods' : 'Bakery Foods')}</h2>
-            <p className="text-xs font-medium text-[var(--color-text-muted)] mt-1">Prices are locked to {selectedClient.name}'s custom pricing.</p>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h2 className="text-base font-bold text-[var(--color-text-main)]">Products — {activeTab === 'all' ? 'All Divisions' : (activeTab === 'primary' ? 'Primary Foods' : 'Bakery Foods')}</h2>
+                <p className="text-xs font-medium text-[var(--color-text-muted)] mt-0.5">Prices are locked to {selectedClient.name}'s custom pricing.</p>
+              </div>
+              {availableCredit > 0 && (
+                <div className="px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs font-semibold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5 self-start sm:self-auto">
+                  <span>Available Credit: {formatCurrency(availableCredit)}</span>
+                </div>
+              )}
+            </div>
           </div>
           {divisionProducts.length === 0 ? (
             <div className="p-12 text-center text-sm font-medium text-gray-500">No active products found for this tab.</div>
@@ -204,8 +234,22 @@ export default function CreateOrderPage() {
           )}
           <div className="px-6 py-5 border-t border-gray-100 dark:border-white/[0.05] bg-gray-50/50 dark:bg-black/10 flex flex-col sm:flex-row items-center justify-between gap-4 sticky bottom-0">
             <div>
-              <p className="text-sm font-semibold text-gray-500 mb-0.5">Order Total ({totalItems} items)</p>
-              <p className="text-2xl font-bold text-[var(--color-text-main)]">{formatCurrency(totalAmount)}</p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-semibold text-gray-500 mb-0.5">Order Total ({totalItems} items)</p>
+                {creditToApply > 0 && (
+                  <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full">
+                    -{formatCurrency(creditToApply)} credit applied
+                  </span>
+                )}
+              </div>
+              <div className="flex items-baseline gap-2">
+                <p className="text-2xl font-bold text-[var(--color-text-main)]">{formatCurrency(totalAmount)}</p>
+                {creditToApply > 0 && (
+                  <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400">
+                    (Net Due: {formatCurrency(netPayable)})
+                  </span>
+                )}
+              </div>
             </div>
             <Button size="lg" icon={<Save className="w-5 h-5" />} onClick={handleSave} className="w-full sm:w-auto shadow-lg shadow-red-500/20">
               {isEdit ? 'Update Order' : 'Save Order'}

@@ -36,8 +36,10 @@ export default function OrderPaymentHistoryModal({
 }: OrderPaymentHistoryModalProps) {
   if (!isOpen || !order) return null;
 
-  const totalPaid = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
-  const pendingAmount = Math.max(0, (order.total || 0) - totalPaid);
+  const totalPaid = payments.reduce((sum, p) => sum + (p.appliedAmount !== undefined ? p.appliedAmount : (p.amount || 0)), 0);
+  const creditApplied = order.creditApplied || 0;
+  const netDue = Math.max(0, (order.total || 0) - creditApplied);
+  const pendingAmount = Math.max(0, netDue - totalPaid);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
@@ -67,11 +69,17 @@ export default function OrderPaymentHistoryModal({
         <div className="p-6 overflow-y-auto space-y-5 flex-1 custom-scrollbar">
 
           {/* Overview summary */}
-          <div className="grid grid-cols-3 gap-3 p-3.5 rounded-2xl bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-800 text-center">
+          <div className={`grid ${creditApplied > 0 ? 'grid-cols-4' : 'grid-cols-3'} gap-2 p-3.5 rounded-2xl bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-800 text-center`}>
             <div>
               <span className="text-[10px] font-semibold text-gray-400 uppercase">Order Total</span>
               <p className="text-sm font-bold text-[var(--color-text-main)]">{formatCurrency(order.total)}</p>
             </div>
+            {creditApplied > 0 && (
+              <div>
+                <span className="text-[10px] font-semibold text-green-600 dark:text-green-400 uppercase">Credit Applied</span>
+                <p className="text-sm font-bold text-green-600 dark:text-green-400">-{formatCurrency(creditApplied)}</p>
+              </div>
+            )}
             <div>
               <span className="text-[10px] font-semibold text-gray-400 uppercase">Total Paid</span>
               <p className="text-sm font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(totalPaid)}</p>
@@ -98,6 +106,7 @@ export default function OrderPaymentHistoryModal({
               <div className="space-y-2.5">
                 {payments.map(p => {
                   const Icon = methodIcon[p.method] || Banknote;
+                  const hasExcess = (p.excessCredit || 0) > 0;
                   return (
                     <div
                       key={p.id}
@@ -108,14 +117,22 @@ export default function OrderPaymentHistoryModal({
                           <Icon className="w-4 h-4" />
                         </div>
                         <div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-sm font-bold text-[var(--color-text-main)]">
                               {formatCurrency(p.amount)}
                             </span>
                             <Badge variant="gray">{methodLabel[p.method] || p.method}</Badge>
+                            {hasExcess && (
+                              <Badge variant="info">
+                                Advance Credit: +{formatCurrency(p.excessCredit || 0)}
+                              </Badge>
+                            )}
                           </div>
-                          <div className="flex items-center gap-2 mt-0.5 text-[11px] text-gray-400">
+                          <div className="flex items-center gap-2 mt-0.5 text-[11px] text-gray-400 flex-wrap">
                             <span>{p.createdAt ? format(new Date(p.createdAt), 'MMM d, yyyy') : '—'}</span>
+                            {hasExcess && p.appliedAmount !== undefined && (
+                              <span>&middot; Applied: {formatCurrency(p.appliedAmount)}</span>
+                            )}
                             {p.updatedBy && (
                               <span>&middot; By {p.updatedBy}</span>
                             )}

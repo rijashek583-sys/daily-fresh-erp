@@ -32,6 +32,8 @@ export interface ClientTotals {
   totalPaid: number;
   outstanding: number;
   openingBalance?: number;
+  credit?: number;
+  rawBalance?: number;
 }
 
 export interface Client {
@@ -48,6 +50,11 @@ export interface Client {
   totalRevenue: number;
   totalPaid?: number;
   outstanding: number;
+  credit?: number;
+  availableCredit?: number;
+  primaryCredit?: number;
+  bakeryCredit?: number;
+  rawBalance?: number;
   openingBalance?: ClientOpeningBalance | null;
   openingBalanceAmount?: number;
   primaryTotals?: ClientTotals;
@@ -94,6 +101,12 @@ export interface Order {
   subtotal: number;
   tax: number;
   total: number;
+  creditApplied?: number;
+  primaryCreditApplied?: number;
+  bakeryCreditApplied?: number;
+  netDue?: number;
+  paidAmount?: number;
+  paymentStatus?: 'paid' | 'partial' | 'pending';
   division?: FilterDivision; // 'all' is valid for cross-division orders
   createdAt: string;
   updatedBy?: string;
@@ -125,6 +138,9 @@ export interface Payment {
   staffName?: string;
   recordedBy?: string;
   amount: number;
+  appliedAmount?: number;
+  excessCredit?: number;
+  isAdvance?: boolean;
   method: PaymentMethod;
   reference?: string;
   notes?: string;
@@ -151,6 +167,10 @@ export interface LedgerTransaction {
   recordedBy?: string;
   invoiceId?: string;
   amount: number;
+  appliedAmount?: number;
+  excessCredit?: number;
+  creditApplied?: number;
+  isAdvance?: boolean;
   paymentDate?: string;
   paymentMethod?: string;
   description?: string;

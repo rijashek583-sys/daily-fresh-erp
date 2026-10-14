@@ -62,7 +62,8 @@ export default function PaymentsCollectionPage() {
     for (const p of validPayments) {
       if (p.invoiceId) {
         const current = map.get(p.invoiceId) || 0;
-        map.set(p.invoiceId, current + (p.amount || 0));
+        const applied = p.appliedAmount !== undefined ? p.appliedAmount : (p.amount || 0);
+        map.set(p.invoiceId, current + applied);
       }
     }
     return map;
@@ -83,8 +84,14 @@ export default function PaymentsCollectionPage() {
         ? o.total
         : itemsToProcess.reduce((sum, i) => sum + (i.total || (i.qty * i.unitPrice) || 0), 0);
 
+      const creditApplied = activeDivision === 'all'
+        ? (o.creditApplied || 0)
+        : (activeDivision === 'primary'
+            ? (o.primaryCreditApplied || (o.division === 'primary' ? (o.creditApplied || 0) : 0))
+            : (o.bakeryCreditApplied || (o.division === 'bakery' ? (o.creditApplied || 0) : 0)));
+
       const paid = invoicePaymentsMap.get(o.id) || 0;
-      const pending = Math.max(0, total - paid);
+      const pending = Math.max(0, total - creditApplied - paid);
 
       const isDirect = o.orderType === 'direct' || o.clientId === 'direct';
       const client = isDirect ? null : clients.find(c => c.id === o.clientId);
