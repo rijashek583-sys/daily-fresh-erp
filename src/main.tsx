@@ -3,6 +3,10 @@ import { createRoot } from 'react-dom/client';
 import './index.css';
 import App from './App.tsx';
 import { registerSW } from 'virtual:pwa-register';
+import { setupGlobalChunkErrorHandler } from './lib/lazyRetry';
+
+// Initialize global handler for dynamic import and preload errors
+setupGlobalChunkErrorHandler();
 
 // Register service worker for safe automatic updates
 registerSW({

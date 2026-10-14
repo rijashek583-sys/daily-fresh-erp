@@ -1,10 +1,12 @@
 import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom';
-import { lazy, Suspense } from 'react';
+import { Suspense } from 'react';
 import { ProtectedRoute } from './ProtectedRoute';
 import { RequireAdmin } from './RequireAdmin';
 import AppShell from '../components/layout/AppShell';
 import LoginPage from '../features/auth/LoginPage';
 import { useAuthStore } from '../stores/authStore';
+import { safeLazy } from '../lib/lazyRetry';
+import { RouteErrorBoundary } from '../components/common/RouteErrorBoundary';
 
 function RootRedirect() {
   const { user, initialized } = useAuthStore();
@@ -16,24 +18,24 @@ function RootRedirect() {
   return <Navigate to="/payments" replace />;
 }
 
-// Lazy-loaded pages for code splitting
-const DashboardPage = lazy(() => import('../features/dashboard/DashboardPage'));
-const ClientsPage = lazy(() => import('../features/clients/ClientsPage'));
-const AddClientPage = lazy(() => import('../features/clients/AddClientPage'));
-const EditClientPage = lazy(() => import('../features/clients/EditClientPage'));
-const ClientDetailPage = lazy(() => import('../features/clients/ClientDetailPage'));
-const ProductsPage = lazy(() => import('../features/products/ProductsPage'));
-const ProductFormPage = lazy(() => import('../features/products/ProductFormPage'));
-const OrdersPage = lazy(() => import('../features/orders/OrdersPage'));
-const CreateOrderPage = lazy(() => import('../features/orders/CreateOrderPage'));
-const BulkOrderPage   = lazy(() => import('../features/orders/BulkOrderPage'));
-const DailyBillingPage = lazy(() => import('../features/billing/DailyBillingPage'));
-const ClientLedgerPage = lazy(() => import('../features/ledger/ClientLedgerPage'));
-const ReportsPage = lazy(() => import('../features/reports/ReportsPage'));
-const SettingsPage = lazy(() => import('../features/settings/SettingsPage'));
-const TrashPage = lazy(() => import('../features/settings/TrashPage'));
-const PaymentsCollectionPage = lazy(() => import('../features/payments/PaymentsCollectionPage'));
-const StaffPage = lazy(() => import('../features/staff/StaffPage'));
+// Lazy-loaded pages with controlled chunk error retry and recovery
+const DashboardPage = safeLazy(() => import('../features/dashboard/DashboardPage'), 'DashboardPage');
+const ClientsPage = safeLazy(() => import('../features/clients/ClientsPage'), 'ClientsPage');
+const AddClientPage = safeLazy(() => import('../features/clients/AddClientPage'), 'AddClientPage');
+const EditClientPage = safeLazy(() => import('../features/clients/EditClientPage'), 'EditClientPage');
+const ClientDetailPage = safeLazy(() => import('../features/clients/ClientDetailPage'), 'ClientDetailPage');
+const ProductsPage = safeLazy(() => import('../features/products/ProductsPage'), 'ProductsPage');
+const ProductFormPage = safeLazy(() => import('../features/products/ProductFormPage'), 'ProductFormPage');
+const OrdersPage = safeLazy(() => import('../features/orders/OrdersPage'), 'OrdersPage');
+const CreateOrderPage = safeLazy(() => import('../features/orders/CreateOrderPage'), 'CreateOrderPage');
+const BulkOrderPage   = safeLazy(() => import('../features/orders/BulkOrderPage'), 'BulkOrderPage');
+const DailyBillingPage = safeLazy(() => import('../features/billing/DailyBillingPage'), 'DailyBillingPage');
+const ClientLedgerPage = safeLazy(() => import('../features/ledger/ClientLedgerPage'), 'ClientLedgerPage');
+const ReportsPage = safeLazy(() => import('../features/reports/ReportsPage'), 'ReportsPage');
+const SettingsPage = safeLazy(() => import('../features/settings/SettingsPage'), 'SettingsPage');
+const TrashPage = safeLazy(() => import('../features/settings/TrashPage'), 'TrashPage');
+const PaymentsCollectionPage = safeLazy(() => import('../features/payments/PaymentsCollectionPage'), 'PaymentsCollectionPage');
+const StaffPage = safeLazy(() => import('../features/staff/StaffPage'), 'StaffPage');
 
 function PageLoader() {
   return (
@@ -52,11 +54,17 @@ function SuspenseWrapper({ children }: { children: React.ReactNode }) {
 }
 
 const router = createBrowserRouter([
-  { path: '/login', element: <LoginPage /> },
+  {
+    path: '/login',
+    element: <LoginPage />,
+    errorElement: <RouteErrorBoundary />,
+  },
   {
     element: <ProtectedRoute />,
+    errorElement: <RouteErrorBoundary />,
     children: [{
       element: <AppShell />,
+      errorElement: <RouteErrorBoundary />,
       children: [
         { path: '/', element: <RootRedirect /> },
         { path: '/dashboard', element: <SuspenseWrapper><DashboardPage /></SuspenseWrapper> },
@@ -83,7 +91,11 @@ const router = createBrowserRouter([
       ],
     }],
   },
-  { path: '*', element: <RootRedirect /> },
+  {
+    path: '*',
+    element: <RootRedirect />,
+    errorElement: <RouteErrorBoundary />,
+  },
 ]);
 
 export function AppRouter() {
