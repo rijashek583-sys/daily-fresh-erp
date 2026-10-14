@@ -26,7 +26,7 @@ import { toast } from 'sonner';
 import { useAuthStore } from '../stores/authStore';
 import { getProductDivision } from '../lib/utils';
 import { useDataStore } from '../stores/dataStore';
-import { type Division, type PaymentMethod, type ClientOpeningBalance } from '../types';
+import { type Division, type PaymentMethod, type ClientOpeningBalance, type Order } from '../types';
 
 function enforceAdmin() {
   const user = useAuthStore.getState().user;
@@ -336,6 +336,20 @@ export async function moveToTrash(
     //  1. Delete its associated ledger entry (for client orders).
     //  2. Atomically update the client's denormalized aggregates.
     if (originalCollection === 'orders') {
+      // Critical Safety: Check for existing payment dependencies
+      const paymentsQuery = query(
+        collection(db, 'payments'),
+        where('invoiceId', '==', docId)
+      );
+      const paymentsSnap = await getDocs(paymentsQuery);
+      const activePayments = paymentsSnap.docs.filter(p => !p.data().deletedAt);
+      if (activePayments.length > 0) {
+        const totalPaid = activePayments.reduce((s, p) => s + (p.data().amount || 0), 0);
+        throw new Error(
+          `Cannot delete order #${docId.slice(0, 8)}: Order has ${activePayments.length} recorded payment(s) totalling ₹${totalPaid.toLocaleString('en-IN')}. Deletion is blocked to protect payment records and client ledger balances.`
+        );
+      }
+
       if (originalData?.clientId && originalData.clientId !== 'direct') {
         // Find and trash the associated ledger debit
         const ledgerQuery = query(
@@ -345,45 +359,6 @@ export async function moveToTrash(
         );
         const ledgerSnap = await getDocs(ledgerQuery);
         ledgerSnap.forEach((lDoc) => {
-          const lTrashRef = doc(db, 'trash', lDoc.id);
-          batch.set(lTrashRef, {
-            originalCollection: 'ledger',
-            originalDocumentId: lDoc.id,
-            originalData: lDoc.data(),
-            deletedAt,
-            deletedBy
-          });
-          batch.delete(lDoc.ref);
-        });
-      }
-
-      // Find and trash all associated payments (both client orders and direct sales)
-      const paymentsQuery = query(
-        collection(db, 'payments'),
-        where('invoiceId', '==', docId)
-      );
-      const paymentsSnap = await getDocs(paymentsQuery);
-      paymentsSnap.forEach((pDoc) => {
-        const pTrashRef = doc(db, 'trash', pDoc.id);
-        batch.set(pTrashRef, {
-          originalCollection: 'payments',
-          originalDocumentId: pDoc.id,
-          originalData: pDoc.data(),
-          deletedAt,
-          deletedBy
-        });
-        batch.delete(pDoc.ref);
-      });
-
-      if (originalData?.clientId && originalData.clientId !== 'direct') {
-        // Find and trash all associated ledger credits (payments)
-        const paymentLedgerQuery = query(
-          collection(db, 'ledger'),
-          where('type', '==', 'payment'),
-          where('invoiceId', '==', docId)
-        );
-        const paymentLedgerSnap = await getDocs(paymentLedgerQuery);
-        paymentLedgerSnap.forEach((lDoc) => {
           const lTrashRef = doc(db, 'trash', lDoc.id);
           batch.set(lTrashRef, {
             originalCollection: 'ledger',
@@ -442,6 +417,205 @@ export async function moveToTrash(
     console.error("Error moving to trash:", error);
     toast.error('Failed to move to trash');
     throw error;
+  }
+}
+
+export interface BulkDeleteOrderFailure {
+  orderId: string;
+  clientName?: string;
+  reason: string;
+}
+
+export interface BulkDeleteOrdersResult {
+  totalRequested: number;
+  successCount: number;
+  failedCount: number;
+  deletedOrderIds: string[];
+  failures: BulkDeleteOrderFailure[];
+}
+
+let isBulkDeleteInProgress = false;
+
+export async function bulkDeleteOrders(
+  ordersToDelete: Order[],
+  deletedBy: string
+): Promise<BulkDeleteOrdersResult> {
+  enforceAdmin();
+
+  if (isBulkDeleteInProgress) {
+    throw new Error('A deletion operation is already in progress. Please wait.');
+  }
+
+  isBulkDeleteInProgress = true;
+  try {
+    const totalRequested = ordersToDelete.length;
+    const deletedOrderIds: string[] = [];
+    const failures: BulkDeleteOrderFailure[] = [];
+
+    if (totalRequested === 0) {
+      return { totalRequested: 0, successCount: 0, failedCount: 0, deletedOrderIds: [], failures: [] };
+    }
+
+    // 1. Build payment lookup from store state
+    const { payments: allPayments } = useDataStore.getState();
+    const paymentsByInvoice = new Map<string, any[]>();
+    for (const p of allPayments || []) {
+      if (!p.deletedAt && p.invoiceId) {
+        const list = paymentsByInvoice.get(p.invoiceId) || [];
+        list.push(p);
+        paymentsByInvoice.set(p.invoiceId, list);
+      }
+    }
+
+    const eligibleOrders: Order[] = [];
+
+    // 2. Pre-filter orders with payments to prevent unsafe deletions
+    for (const order of ordersToDelete) {
+      const linkedPayments = paymentsByInvoice.get(order.id) || [];
+      if (linkedPayments.length > 0) {
+        const totalPaid = linkedPayments.reduce((s, p) => s + (p.amount || 0), 0);
+        failures.push({
+          orderId: order.id,
+          clientName: order.clientName || (order.clientId === 'direct' ? 'Direct Sale' : 'Unknown Client'),
+          reason: `Has ${linkedPayments.length} recorded payment(s) (₹${totalPaid.toLocaleString('en-IN')}). Deletion blocked to protect payment records and ledger balance.`,
+        });
+      } else {
+        eligibleOrders.push(order);
+      }
+    }
+
+    // 3. Batch delete eligible orders in chunks of 25 (well within Firestore 500-op limit)
+    const BATCH_SIZE = 25;
+    const affectedClients = new Set<string>();
+    const stockReversalsToRun: Order[] = [];
+    const now = new Date().toISOString();
+
+    for (let i = 0; i < eligibleOrders.length; i += BATCH_SIZE) {
+      const chunk = eligibleOrders.slice(i, i + BATCH_SIZE);
+      const batch = writeBatch(db);
+      const chunkOrdersToDelete: Order[] = [];
+
+      for (const order of chunk) {
+        // Double-check Firestore payments collection to guarantee no concurrent payments were added
+        try {
+          const paymentsSnap = await getDocs(
+            query(collection(db, 'payments'), where('invoiceId', '==', order.id))
+          );
+          const activePayments = paymentsSnap.docs.filter(d => !d.data().deletedAt);
+          if (activePayments.length > 0) {
+            const totalPaid = activePayments.reduce((s, d) => s + (d.data().amount || 0), 0);
+            failures.push({
+              orderId: order.id,
+              clientName: order.clientName || 'Direct Sale',
+              reason: `Found active payment record in database (₹${totalPaid.toLocaleString('en-IN')}). Deletion blocked.`,
+            });
+            continue;
+          }
+        } catch (checkErr) {
+          console.warn(`[BulkDelete] Could not check Firestore payments for order ${order.id}:`, checkErr);
+        }
+
+        // Add to trash collection
+        const trashRef = doc(db, 'trash', order.id);
+        batch.set(trashRef, {
+          originalCollection: 'orders',
+          originalDocumentId: order.id,
+          originalData: order,
+          deletedAt: now,
+          deletedBy,
+        });
+
+        // Delete from orders collection
+        const orderRef = doc(db, 'orders', order.id);
+        batch.delete(orderRef);
+
+        // Move associated invoice ledger debit to trash if client order
+        if (order.clientId && order.clientId !== 'direct') {
+          try {
+            const ledgerSnap = await getDocs(
+              query(
+                collection(db, 'ledger'),
+                where('type', '==', 'invoice'),
+                where('invoiceId', '==', order.id)
+              )
+            );
+            ledgerSnap.forEach(lDoc => {
+              const lTrashRef = doc(db, 'trash', lDoc.id);
+              batch.set(lTrashRef, {
+                originalCollection: 'ledger',
+                originalDocumentId: lDoc.id,
+                originalData: lDoc.data(),
+                deletedAt: now,
+                deletedBy,
+              });
+              batch.delete(lDoc.ref);
+            });
+            affectedClients.add(order.clientId);
+          } catch (ledgerErr) {
+            console.error(`[BulkDelete] Error processing ledger for order ${order.id}:`, ledgerErr);
+          }
+        }
+
+        chunkOrdersToDelete.push(order);
+      }
+
+      if (chunkOrdersToDelete.length > 0) {
+        try {
+          await batch.commit();
+          for (const ord of chunkOrdersToDelete) {
+            deletedOrderIds.push(ord.id);
+            stockReversalsToRun.push(ord);
+          }
+        } catch (commitErr: any) {
+          console.error('[BulkDelete] Batch commit failed:', commitErr);
+          for (const ord of chunkOrdersToDelete) {
+            failures.push({
+              orderId: ord.id,
+              clientName: ord.clientName,
+              reason: commitErr.message || 'Firestore batch write failed',
+            });
+          }
+        }
+      }
+    }
+
+    // 4. Reverse finished stock for all successfully deleted orders
+    for (const order of stockReversalsToRun) {
+      if (order.items && order.items.length > 0) {
+        try {
+          await reverseFinishedStockForOrder({
+            orderId: order.id,
+            clientId: order.clientId || '',
+            clientName: order.clientName || '',
+            items: order.items,
+            orderUpdatedAt: order.updatedAt || '',
+            deliveryDate: order.deliveryDate || '',
+            division: order.division || 'primary',
+          });
+        } catch (stockErr) {
+          console.error(`[BulkDelete] Stock reversal failed for order ${order.id}:`, stockErr);
+        }
+      }
+    }
+
+    // 5. Recalculate client totals once per affected client
+    for (const clientId of affectedClients) {
+      try {
+        await verifyAndSyncClientTotals(clientId);
+      } catch (syncErr) {
+        console.error(`[BulkDelete] Client total sync failed for client ${clientId}:`, syncErr);
+      }
+    }
+
+    return {
+      totalRequested,
+      successCount: deletedOrderIds.length,
+      failedCount: failures.length,
+      deletedOrderIds,
+      failures,
+    };
+  } finally {
+    isBulkDeleteInProgress = false;
   }
 }
 
