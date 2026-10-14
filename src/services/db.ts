@@ -1344,3 +1344,265 @@ export async function permanentlyDeleteFromTrash(trashDocId: string) {
     throw error;
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin-Only Test Data Cleanup
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface TestDataSummary {
+  ordersCount: number;
+  clientOrdersCount: number;
+  directOrdersCount: number;
+  paymentsCount: number;
+  paymentsLinkedToOrdersCount: number;
+  standalonePaymentsCount: number;
+  ledgerInvoicesCount: number;
+  ledgerPaymentsCount: number;
+  ledgerOpeningBalancesCount: number;
+  affectedClientsCount: number;
+  trashCount: number;
+  orderStockTransactionsCount: number;
+  stockSyncStatusCount: number;
+}
+
+export interface TestDataCleanupResult {
+  deletedOrdersCount: number;
+  deletedPaymentsCount: number;
+  deletedLedgerEntriesCount: number;
+  recalculatedClientsCount: number;
+  deletedTrashCount: number;
+  deletedStockTransactionsCount: number;
+  deletedStockSyncStatusCount: number;
+  preservedStandalonePaymentsCount: number;
+  preservedOpeningBalancesCount: number;
+}
+
+export async function getTestDataSummary(): Promise<TestDataSummary> {
+  enforceAdmin();
+
+  const [ordersSnap, paymentsSnap, ledgerSnap, trashSnap, fstSnap, syncSnap] = await Promise.all([
+    getDocs(collection(db, COLLECTIONS.ORDERS)),
+    getDocs(collection(db, COLLECTIONS.PAYMENTS)),
+    getDocs(collection(db, 'ledger')),
+    getDocs(collection(db, 'trash')),
+    getDocs(collection(db, 'finishedStockTransactions')),
+    getDocs(collection(db, 'stockSyncStatus')),
+  ]);
+
+  const orderIds = new Set(ordersSnap.docs.map(d => d.id));
+  const clientOrders = ordersSnap.docs.filter(d => d.data().clientId !== 'direct' && d.data().orderType !== 'direct');
+  const directOrders = ordersSnap.docs.filter(d => d.data().clientId === 'direct' || d.data().orderType === 'direct');
+
+  const linkedPayments = paymentsSnap.docs.filter(d => d.data().invoiceId && orderIds.has(d.data().invoiceId));
+  const standalonePayments = paymentsSnap.docs.filter(d => !d.data().invoiceId || !orderIds.has(d.data().invoiceId));
+
+  const ledgerInvoices = ledgerSnap.docs.filter(d => d.data().type === 'invoice' && d.data().invoiceId && orderIds.has(d.data().invoiceId));
+  const ledgerPayments = ledgerSnap.docs.filter(d => d.data().type === 'payment' && ((d.data().invoiceId && orderIds.has(d.data().invoiceId)) || linkedPayments.some(p => p.id === d.data().paymentId)));
+  const ledgerOpening = ledgerSnap.docs.filter(d => d.data().type === 'opening_balance');
+
+  const affectedClients = new Set<string>();
+  ordersSnap.docs.forEach(d => {
+    const cid = d.data().clientId;
+    if (cid && cid !== 'direct') affectedClients.add(cid);
+  });
+
+  const orderStockTransactions = fstSnap.docs.filter(d => d.data().orderId && orderIds.has(d.data().orderId));
+  const syncDocs = syncSnap.docs.filter(d => orderIds.has(d.id) || (d.data().orderId && orderIds.has(d.data().orderId)));
+
+  const testTrash = trashSnap.docs.filter(d => ['orders', 'payments', 'ledger'].includes(d.data().originalCollection));
+
+  return {
+    ordersCount: ordersSnap.docs.length,
+    clientOrdersCount: clientOrders.length,
+    directOrdersCount: directOrders.length,
+    paymentsCount: paymentsSnap.docs.length,
+    paymentsLinkedToOrdersCount: linkedPayments.length,
+    standalonePaymentsCount: standalonePayments.length,
+    ledgerInvoicesCount: ledgerInvoices.length,
+    ledgerPaymentsCount: ledgerPayments.length,
+    ledgerOpeningBalancesCount: ledgerOpening.length,
+    affectedClientsCount: affectedClients.size,
+    trashCount: testTrash.length,
+    orderStockTransactionsCount: orderStockTransactions.length,
+    stockSyncStatusCount: syncDocs.length,
+  };
+}
+
+export async function cleanupTestData(options: {
+  preserveStandalonePayments?: boolean;
+  purgeTrash?: boolean;
+  purgeStockTransactions?: boolean;
+} = {}): Promise<TestDataCleanupResult> {
+  enforceAdmin();
+
+  const {
+    preserveStandalonePayments = true,
+    purgeTrash = true,
+    purgeStockTransactions = true,
+  } = options;
+
+  // 1. Fetch current collections
+  const [ordersSnap, paymentsSnap, ledgerSnap, trashSnap, fstSnap, syncSnap] = await Promise.all([
+    getDocs(collection(db, COLLECTIONS.ORDERS)),
+    getDocs(collection(db, COLLECTIONS.PAYMENTS)),
+    getDocs(collection(db, 'ledger')),
+    getDocs(collection(db, 'trash')),
+    getDocs(collection(db, 'finishedStockTransactions')),
+    getDocs(collection(db, 'stockSyncStatus')),
+  ]);
+
+  const orderIds = new Set(ordersSnap.docs.map(d => d.id));
+  const affectedClientIds = new Set<string>();
+
+  ordersSnap.docs.forEach(d => {
+    const data = d.data();
+    if (data.clientId && data.clientId !== 'direct') {
+      affectedClientIds.add(data.clientId);
+    }
+  });
+
+  // Identify payments to delete
+  const paymentsToDelete: string[] = [];
+  let preservedStandaloneCount = 0;
+
+  paymentsSnap.docs.forEach(d => {
+    const data = d.data();
+    const isLinked = data.invoiceId && orderIds.has(data.invoiceId);
+    if (isLinked) {
+      paymentsToDelete.push(d.id);
+      if (data.clientId && data.clientId !== 'direct') {
+        affectedClientIds.add(data.clientId);
+      }
+    } else {
+      if (preserveStandalonePayments) {
+        preservedStandaloneCount++;
+      } else {
+        paymentsToDelete.push(d.id);
+        if (data.clientId && data.clientId !== 'direct') {
+          affectedClientIds.add(data.clientId);
+        }
+      }
+    }
+  });
+
+  const paymentIdsToDeleteSet = new Set(paymentsToDelete);
+
+  // Identify ledger entries to delete
+  const ledgerToDelete: string[] = [];
+  let preservedOpeningCount = 0;
+
+  ledgerSnap.docs.forEach(d => {
+    const data = d.data();
+    if (data.type === 'opening_balance') {
+      preservedOpeningCount++;
+      return; // Never delete opening balances
+    }
+
+    if (data.type === 'invoice') {
+      if (data.invoiceId && orderIds.has(data.invoiceId)) {
+        ledgerToDelete.push(d.id);
+        if (data.clientId && data.clientId !== 'direct') {
+          affectedClientIds.add(data.clientId);
+        }
+      }
+    } else if (data.type === 'payment') {
+      const isOrderLinked = (data.invoiceId && orderIds.has(data.invoiceId)) || (data.paymentId && paymentIdsToDeleteSet.has(data.paymentId));
+      if (isOrderLinked) {
+        ledgerToDelete.push(d.id);
+        if (data.clientId && data.clientId !== 'direct') {
+          affectedClientIds.add(data.clientId);
+        }
+      } else if (!preserveStandalonePayments) {
+        ledgerToDelete.push(d.id);
+        if (data.clientId && data.clientId !== 'direct') {
+          affectedClientIds.add(data.clientId);
+        }
+      }
+    }
+  });
+
+  // Identify trash documents to delete (only orders, payments, ledger)
+  const trashToDelete: string[] = [];
+  if (purgeTrash) {
+    trashSnap.docs.forEach(d => {
+      const col = d.data().originalCollection;
+      if (['orders', 'payments', 'ledger'].includes(col)) {
+        trashToDelete.push(d.id);
+      }
+    });
+  }
+
+  // Identify stock transactions and sync status docs to delete
+  const stockTxToDelete: string[] = [];
+  const syncDocsToDelete: string[] = [];
+  if (purgeStockTransactions) {
+    fstSnap.docs.forEach(d => {
+      if (d.data().orderId && orderIds.has(d.data().orderId)) {
+        stockTxToDelete.push(d.id);
+      }
+    });
+    syncSnap.docs.forEach(d => {
+      if (orderIds.has(d.id) || (d.data().orderId && orderIds.has(d.data().orderId))) {
+        syncDocsToDelete.push(d.id);
+      }
+    });
+  }
+
+  // 2. Safe batch delete execution in chunks of 250 (limit is 500)
+  const executeBatchDeletes = async (colName: string, docIds: string[]) => {
+    const BATCH_SIZE = 250;
+    for (let i = 0; i < docIds.length; i += BATCH_SIZE) {
+      const chunk = docIds.slice(i, i + BATCH_SIZE);
+      const batch = writeBatch(db);
+      chunk.forEach(id => {
+        batch.delete(doc(db, colName, id));
+      });
+      await batch.commit();
+    }
+  };
+
+  // Delete orders
+  await executeBatchDeletes(COLLECTIONS.ORDERS, Array.from(orderIds));
+
+  // Delete payments
+  await executeBatchDeletes(COLLECTIONS.PAYMENTS, paymentsToDelete);
+
+  // Delete ledger entries
+  await executeBatchDeletes('ledger', ledgerToDelete);
+
+  // Delete stock transactions & sync status
+  if (stockTxToDelete.length > 0) {
+    await executeBatchDeletes('finishedStockTransactions', stockTxToDelete);
+  }
+  if (syncDocsToDelete.length > 0) {
+    await executeBatchDeletes('stockSyncStatus', syncDocsToDelete);
+  }
+
+  // Delete trash documents
+  if (trashToDelete.length > 0) {
+    await executeBatchDeletes('trash', trashToDelete);
+  }
+
+  // 3. Recalculate client totals atomically for all affected clients
+  for (const clientId of affectedClientIds) {
+    try {
+      await verifyAndSyncClientTotals(clientId);
+    } catch (syncErr) {
+      console.error(`[Cleanup] Failed to recalculate totals for client ${clientId}:`, syncErr);
+    }
+  }
+
+  toast.success('Test data cleanup completed successfully');
+
+  return {
+    deletedOrdersCount: orderIds.size,
+    deletedPaymentsCount: paymentsToDelete.length,
+    deletedLedgerEntriesCount: ledgerToDelete.length,
+    recalculatedClientsCount: affectedClientIds.size,
+    deletedTrashCount: trashToDelete.length,
+    deletedStockTransactionsCount: stockTxToDelete.length,
+    deletedStockSyncStatusCount: syncDocsToDelete.length,
+    preservedStandalonePaymentsCount: preservedStandaloneCount,
+    preservedOpeningBalancesCount: preservedOpeningCount,
+  };
+}

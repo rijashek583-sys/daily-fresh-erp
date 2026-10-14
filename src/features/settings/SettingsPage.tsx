@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Save, User, Bell, Moon, Sun, Shield, Building2, ChevronRight, Check } from 'lucide-react';
+import { Save, User, Bell, Moon, Sun, Shield, Building2, ChevronRight, Check, Trash2, AlertTriangle, RefreshCw } from 'lucide-react';
 import { Button, Card, Input, Select, PageHeader, Avatar } from '../../components/ui';
 import { useAuthStore } from '../../stores/authStore';
 import { useUIStore } from '../../stores/uiStore';
 import { toast } from 'sonner';
 import { useDataStore } from '../../stores/dataStore';
+import { getTestDataSummary, cleanupTestData, type TestDataSummary } from '../../services/db';
 
 type SettingsTab = 'profile' | 'company' | 'notifications' | 'appearance' | 'security' | 'advanced';
 
@@ -14,13 +15,15 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>('profile');
   const [loading, setLoading] = useState(false);
 
+  const isAdmin = user?.role === 'admin';
+
   const tabs: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
     { id: 'profile', label: 'Profile Settings', icon: User },
     { id: 'company', label: 'Company Info', icon: Building2 },
     { id: 'notifications', label: 'Notifications', icon: Bell },
     { id: 'appearance', label: 'Appearance', icon: Moon },
     { id: 'security', label: 'Security', icon: Shield },
-    { id: 'advanced', label: 'Advanced', icon: Shield },
+    ...(isAdmin ? [{ id: 'advanced' as SettingsTab, label: 'Advanced', icon: Shield }] : []),
   ];
 
   const handleSave = async (e: React.FormEvent) => {
@@ -51,6 +54,55 @@ export default function SettingsPage() {
       toast.error('Migration failed');
     } finally {
       setMigrating(false);
+    }
+  };
+
+  // Test Data Cleanup State
+  const [cleanupSummary, setCleanupSummary] = useState<TestDataSummary | null>(null);
+  const [loadingSummary, setLoadingSummary] = useState(false);
+  const [cleaningData, setCleaningData] = useState(false);
+  const [preserveStandalone, setPreserveStandalone] = useState(true);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [confirmInput, setConfirmInput] = useState('');
+
+  const handleInspectTestData = async () => {
+    setLoadingSummary(true);
+    try {
+      const summary = await getTestDataSummary();
+      setCleanupSummary(summary);
+      toast.success('Test data inspection completed');
+    } catch (err: any) {
+      console.error(err);
+      toast.error('Failed to inspect test data: ' + err.message);
+    } finally {
+      setLoadingSummary(false);
+    }
+  };
+
+  const handleExecuteCleanup = async () => {
+    if (confirmInput.trim().toUpperCase() !== 'DELETE') {
+      toast.error('Please type DELETE to confirm deletion');
+      return;
+    }
+
+    setCleaningData(true);
+    try {
+      const result = await cleanupTestData({
+        preserveStandalonePayments: preserveStandalone,
+        purgeTrash: true,
+        purgeStockTransactions: true,
+      });
+      setShowConfirmModal(false);
+      setConfirmInput('');
+      toast.success('Cleanup complete!', {
+        description: `Deleted ${result.deletedOrdersCount} orders, ${result.deletedPaymentsCount} payments, ${result.deletedLedgerEntriesCount} ledger entries. Recalculated ${result.recalculatedClientsCount} client balances.`
+      });
+      await handleInspectTestData();
+    } catch (err: any) {
+      console.error(err);
+      toast.error('Cleanup failed: ' + err.message);
+    } finally {
+      setCleaningData(false);
     }
   };
 
@@ -190,9 +242,143 @@ export default function SettingsPage() {
                 <div className="space-y-8 animate-in fade-in duration-300">
                   <div>
                     <h3 className="text-lg font-semibold text-[var(--color-text-main)] mb-1">Advanced Operations</h3>
-                    <p className="text-sm font-medium text-[var(--color-text-muted)]">Perform administrative maintenance tasks.</p>
+                    <p className="text-sm font-medium text-[var(--color-text-muted)]">Perform administrative maintenance and cleanup tasks.</p>
                   </div>
                   
+                  {/* Test Data Cleanup Card */}
+                  <div className="p-6 border border-red-200 dark:border-red-900/40 rounded-2xl bg-red-50/40 dark:bg-red-950/10">
+                    <div className="flex items-start gap-4">
+                      <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center shrink-0 text-red-600 dark:text-red-400">
+                        <AlertTriangle className="w-5 h-5" />
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-base font-semibold text-red-700 dark:text-red-400">Test Data Cleanup</h4>
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 font-semibold uppercase tracking-wider">Admin Only</span>
+                        </div>
+                        <p className="text-sm text-gray-600 dark:text-gray-400 mt-1 mb-4 leading-relaxed">
+                          Permanently delete all existing client & direct orders, associated payments, and invoice ledger entries created for testing. 
+                          Client balances will be recalculated. Clients, products, staff accounts, prices, and opening balances are 100% preserved.
+                        </p>
+
+                        <div className="flex flex-wrap gap-3 mb-4">
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            loading={loadingSummary}
+                            onClick={handleInspectTestData}
+                            icon={<RefreshCw className="w-4 h-4" />}
+                          >
+                            Inspect Database
+                          </Button>
+
+                          <Button
+                            type="button"
+                            variant="danger"
+                            size="sm"
+                            onClick={() => {
+                              setConfirmInput('');
+                              setShowConfirmModal(true);
+                            }}
+                            icon={<Trash2 className="w-4 h-4" />}
+                          >
+                            Purge Test Data
+                          </Button>
+                        </div>
+
+                        {cleanupSummary && (
+                          <div className="mt-4 p-4 rounded-xl border border-red-200 dark:border-red-900/30 bg-white dark:bg-gray-900 space-y-3">
+                            <h5 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Scope of Affected Records</h5>
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                              <div className="p-2.5 rounded-lg bg-gray-50 dark:bg-gray-800">
+                                <p className="text-xs text-gray-500">Orders to Delete</p>
+                                <p className="text-base font-bold text-red-600">{cleanupSummary.ordersCount} <span className="text-xs font-normal text-gray-500">({cleanupSummary.clientOrdersCount} client, {cleanupSummary.directOrdersCount} direct)</span></p>
+                              </div>
+                              <div className="p-2.5 rounded-lg bg-gray-50 dark:bg-gray-800">
+                                <p className="text-xs text-gray-500">Order Payments</p>
+                                <p className="text-base font-bold text-red-600">{cleanupSummary.paymentsLinkedToOrdersCount}</p>
+                              </div>
+                              <div className="p-2.5 rounded-lg bg-gray-50 dark:bg-gray-800">
+                                <p className="text-xs text-gray-500">Ledger Debits/Credits</p>
+                                <p className="text-base font-bold text-red-600">{cleanupSummary.ledgerInvoicesCount + cleanupSummary.ledgerPaymentsCount}</p>
+                              </div>
+                              <div className="p-2.5 rounded-lg bg-gray-50 dark:bg-gray-800">
+                                <p className="text-xs text-gray-500">Clients to Recalculate</p>
+                                <p className="text-base font-bold text-blue-600">{cleanupSummary.affectedClientsCount}</p>
+                              </div>
+                            </div>
+
+                            <div className="pt-2 text-xs text-gray-500 flex flex-wrap gap-x-4 gap-y-1 border-t border-gray-100 dark:border-gray-800">
+                              <span>Standalone Payments: <strong className="text-emerald-600 font-semibold">{cleanupSummary.standalonePaymentsCount} (Preserved)</strong></span>
+                              <span>Opening Balances: <strong className="text-emerald-600 font-semibold">{cleanupSummary.ledgerOpeningBalancesCount} (Preserved)</strong></span>
+                              <span>Stock Deductions: <strong>{cleanupSummary.orderStockTransactionsCount} to clear</strong></span>
+                              <span>Trash Records: <strong>{cleanupSummary.trashCount} to purge</strong></span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Confirmation Modal */}
+                  {showConfirmModal && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
+                      <div className="bg-white dark:bg-gray-900 border border-red-200 dark:border-red-900/50 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4">
+                        <div className="flex items-center gap-3 text-red-600 dark:text-red-400">
+                          <AlertTriangle className="w-6 h-6" />
+                          <h4 className="text-lg font-bold">Confirm Test Data Cleanup</h4>
+                        </div>
+                        <p className="text-sm text-gray-600 dark:text-gray-300">
+                          This action is <strong>irreversible</strong>. All existing orders and their linked payments will be permanently deleted from Firestore.
+                        </p>
+                        <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-xl space-y-2 text-xs text-gray-600 dark:text-gray-300">
+                          <label className="flex items-center gap-2 cursor-pointer font-medium">
+                            <input
+                              type="checkbox"
+                              checked={preserveStandalone}
+                              onChange={(e) => setPreserveStandalone(e.target.checked)}
+                              className="rounded text-[var(--color-primary)] focus:ring-[var(--color-primary)]"
+                            />
+                            Preserve Standalone Payments (e.g. unlinked on-account cash receipts)
+                          </label>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold uppercase text-gray-500 mb-1">
+                            Type <span className="text-red-600">DELETE</span> to confirm:
+                          </label>
+                          <Input
+                            id="confirm-delete-input"
+                            value={confirmInput}
+                            onChange={(e) => setConfirmInput(e.target.value)}
+                            placeholder="Type DELETE"
+                            autoFocus
+                          />
+                        </div>
+                        <div className="flex justify-end gap-3 pt-2">
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            onClick={() => setShowConfirmModal(false)}
+                            disabled={cleaningData}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="danger"
+                            disabled={confirmInput.trim().toUpperCase() !== 'DELETE'}
+                            loading={cleaningData}
+                            onClick={handleExecuteCleanup}
+                            icon={<Trash2 className="w-4 h-4" />}
+                          >
+                            Permanently Delete
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="p-6 border border-gray-200 dark:border-gray-800 rounded-2xl bg-gray-50 dark:bg-gray-800/20">
                     <h4 className="text-base font-semibold text-[var(--color-text-main)] mb-2">Data Migration: Products Division</h4>
                     <p className="text-sm text-[var(--color-text-muted)] mb-4">
