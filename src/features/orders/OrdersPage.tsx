@@ -504,29 +504,13 @@ export default function OrdersPage() {
               New Direct Sale
             </Button>
             {isAdmin && (
-              <>
-                <Button
-                  size="md"
-                  icon={<Plus className="w-4 h-4" />}
-                  onClick={() => navigate('/orders/bulk')}
-                >
-                  New Order
-                </Button>
-                {orders.length > 0 && (
-                  <Button
-                    size="md"
-                    variant="outline"
-                    className="text-red-600 border-red-200 hover:bg-red-50 dark:border-red-900/40 dark:text-red-400 dark:hover:bg-red-950/40"
-                    icon={<Trash2 className="w-4 h-4 text-red-500" />}
-                    onClick={() => {
-                      setDeleteAllConfirmText('');
-                      setDeleteAllModalOpen(true);
-                    }}
-                  >
-                    Delete All Orders
-                  </Button>
-                )}
-              </>
+              <Button
+                size="md"
+                icon={<Plus className="w-4 h-4" />}
+                onClick={() => navigate('/orders/bulk')}
+              >
+                New Order
+              </Button>
             )}
           </div>
         }
