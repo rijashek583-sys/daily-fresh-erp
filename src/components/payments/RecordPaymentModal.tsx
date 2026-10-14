@@ -258,7 +258,7 @@ export default function RecordPaymentModal({
               <div>
                 <p className="text-[10px] font-semibold uppercase text-gray-400">Total</p>
                 <p className="text-xs font-bold text-[var(--color-text-main)]">
-                  {formatCurrency(order ? order.total : clientMetrics.outstanding)}
+                  {formatCurrency(order ? order.total : Math.max(0, clientMetrics.outstanding))}
                 </p>
               </div>
               <div>
@@ -274,6 +274,11 @@ export default function RecordPaymentModal({
                 </p>
               </div>
             </div>
+            {!order && clientMetrics.outstanding < 0 && (
+              <p className="text-center text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 pt-1">
+                Client has an advance credit of {formatCurrency(Math.abs(clientMetrics.outstanding))}.
+              </p>
+            )}
           </div>
 
           {/* Amount Input */}

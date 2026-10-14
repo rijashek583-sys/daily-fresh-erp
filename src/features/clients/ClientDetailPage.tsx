@@ -355,8 +355,12 @@ export default function ClientDetailPage() {
               <p className="text-xs font-semibold text-[var(--color-text-muted)] mt-1 uppercase tracking-widest">Total Paid</p>
             </Card>
             <Card className="text-center">
-              <p className="text-3xl font-extrabold text-amber-600">{formatCurrency(totalPending)}</p>
-              <p className="text-xs font-semibold text-[var(--color-text-muted)] mt-1 uppercase tracking-widest">Outstanding</p>
+              <p className={`text-3xl font-extrabold ${totalPending > 0 ? 'text-amber-600 dark:text-amber-400' : totalPending < 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400 dark:text-gray-500'}`}>
+                {formatCurrency(Math.abs(totalPending))}
+              </p>
+              <p className="text-xs font-semibold text-[var(--color-text-muted)] mt-1 uppercase tracking-widest">
+                {totalPending > 0 ? 'Outstanding' : totalPending < 0 ? 'Advance Credit' : 'Balance Settled'}
+              </p>
             </Card>
           </div>
         </div>
@@ -532,14 +536,16 @@ export default function ClientDetailPage() {
             <Card className="flex flex-col justify-between relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-[var(--color-primary)]/5 rounded-full blur-2xl -translate-y-1/2 translate-x-1/3" />
               <div className="flex items-center gap-2 mb-4 relative">
-                <p className="text-xs font-bold text-[var(--color-text-muted)]">Outstanding Balance</p>
+                <p className="text-xs font-bold text-[var(--color-text-muted)]">
+                  {balance > 0 ? 'Outstanding Balance' : balance < 0 ? 'Advance Credit' : 'Current Balance'}
+                </p>
               </div>
               <div className="relative">
-                <p className={`text-2xl font-semibold tracking-tight ${balance > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-[var(--color-success)]'}`}>
+                <p className={`text-2xl font-semibold tracking-tight ${balance > 0 ? 'text-amber-600 dark:text-amber-400' : balance < 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-[var(--color-text-main)]'}`}>
                   {formatCurrency(Math.abs(balance))}
                 </p>
-                <Badge variant={balance > 0 ? 'warning' : 'success'} className="mt-2 relative z-10">
-                  {balance > 0 ? 'Receivable' : 'Settled'}
+                <Badge variant={balance > 0 ? 'warning' : balance < 0 ? 'success' : 'gray'} className="mt-2 relative z-10">
+                  {balance > 0 ? 'Receivable' : balance < 0 ? 'Advance Credit' : 'Settled'}
                 </Badge>
               </div>
             </Card>
@@ -574,7 +580,11 @@ export default function ClientDetailPage() {
                         <td className="px-6 py-4"><p className="text-sm font-medium text-[var(--color-text-main)] max-w-[200px] truncate">{entry.description}</p></td>
                         <td className="px-6 py-4 text-right">{entry.debit > 0 ? <span className="text-sm font-semibold text-[var(--color-text-main)]">{formatCurrency(entry.debit)}</span> : <span className="text-gray-300 dark:text-gray-700">—</span>}</td>
                         <td className="px-6 py-4 text-right">{entry.credit > 0 ? <span className="text-sm font-semibold text-[var(--color-success)]">{formatCurrency(entry.credit)}</span> : <span className="text-gray-300 dark:text-gray-700">—</span>}</td>
-                        <td className="px-6 py-4 text-right"><span className={`text-sm font-semibold ${entry.balance > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-[var(--color-success)]'}`}>{formatCurrency(entry.balance)}</span></td>
+                        <td className="px-6 py-4 text-right">
+                          <span className={`text-sm font-semibold ${entry.balance > 0 ? 'text-amber-600 dark:text-amber-400' : entry.balance < 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400'}`}>
+                            {entry.balance < 0 ? `${formatCurrency(Math.abs(entry.balance))} CR` : formatCurrency(entry.balance)}
+                          </span>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -604,12 +614,20 @@ export default function ClientDetailPage() {
               </div>
             </Card>
             <Card className="flex flex-col justify-between">
-              <div className="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center mb-4">
-                <Clock className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center mb-4 ${totalPending > 0 ? 'bg-amber-100 dark:bg-amber-900/30' : 'bg-green-100 dark:bg-green-900/30'}`}>
+                {totalPending > 0 ? (
+                  <Clock className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                ) : (
+                  <CheckCircle2 className="w-5 h-5 text-green-600 dark:text-green-400" />
+                )}
               </div>
               <div>
-                <p className="text-2xl font-semibold text-amber-600 dark:text-amber-400 tracking-tight mb-1">{formatCurrency(totalPending)}</p>
-                <p className="text-sm font-medium text-[var(--color-text-muted)]">Pending</p>
+                <p className={`text-2xl font-semibold tracking-tight mb-1 ${totalPending > 0 ? 'text-amber-600 dark:text-amber-400' : totalPending < 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400 dark:text-gray-500'}`}>
+                  {formatCurrency(Math.abs(totalPending))}
+                </p>
+                <p className="text-sm font-medium text-[var(--color-text-muted)]">
+                  {totalPending > 0 ? 'Pending' : totalPending < 0 ? 'Advance Credit' : 'Pending'}
+                </p>
               </div>
             </Card>
             <Card className="flex flex-col justify-between">

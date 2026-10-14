@@ -113,7 +113,20 @@ export default function ClientsPage() {
       key: 'outstanding', label: 'Outstanding', 
       render: r => {
         const metrics = getClientMetrics(r.id, activeDivision);
-        return <span className={`text-sm font-bold ${metrics.outstanding > 0 ? 'text-amber-600' : 'text-green-600'}`}>{formatCurrency(Math.abs(metrics.outstanding))}</span>;
+        if (metrics.outstanding > 0) {
+          return <span className="text-sm font-bold text-amber-600 dark:text-amber-400">{formatCurrency(metrics.outstanding)}</span>;
+        }
+        if (metrics.outstanding < 0) {
+          return (
+            <span 
+              className="inline-flex items-center text-xs font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800/40"
+              title="Advance credit balance"
+            >
+              CR {formatCurrency(Math.abs(metrics.outstanding))}
+            </span>
+          );
+        }
+        return <span className="text-sm font-semibold text-gray-400 dark:text-gray-500">₹0.00</span>;
       }
     },
     { key: 'city', label: 'Location', render: r => <span className="text-sm font-medium text-[var(--color-text-muted)]">{r.city || r.region || '—'}</span> },

@@ -72,12 +72,15 @@ export function getClientMetrics(clientId: string, division: FilterDivision) {
     const totalInvoiced = clientLedger.filter(l => l.type === 'invoice').reduce((sum, l) => sum + (l.amount || 0), 0);
     const totalPaid = clientLedger.filter(l => l.type === 'payment').reduce((sum, l) => sum + (l.amount || 0), 0);
     const totalOrders = clientLedger.filter(l => l.type === 'invoice').length;
+    const balance = (openingBalance + totalInvoiced) - totalPaid;
 
     return {
       openingBalance,
       totalInvoiced,
       totalPaid,
-      outstanding: (openingBalance + totalInvoiced) - totalPaid,
+      outstanding: balance,
+      receivable: Math.max(0, balance),
+      credit: balance < 0 ? Math.abs(balance) : 0,
       totalOrders
     };
   }
@@ -112,18 +115,30 @@ export function getClientMetrics(clientId: string, division: FilterDivision) {
 
   const totalInvoiced = clientOrders.reduce((sum, o) => sum + (o.total || 0), 0);
   const totalPaid = clientPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+  const balance = (openingBalance + totalInvoiced) - totalPaid;
 
   return {
     openingBalance,
     totalInvoiced,
     totalPaid,
-    outstanding: (openingBalance + totalInvoiced) - totalPaid,
+    outstanding: balance,
+    receivable: Math.max(0, balance),
+    credit: balance < 0 ? Math.abs(balance) : 0,
     totalOrders: clientOrders.length
   };
 }
 
 export function getClientOutstanding(clientId: string, division: FilterDivision): number {
   return getClientMetrics(clientId, division).outstanding;
+}
+
+export function getClientReceivable(clientId: string, division: FilterDivision): number {
+  return Math.max(0, getClientMetrics(clientId, division).outstanding);
+}
+
+export function getClientCredit(clientId: string, division: FilterDivision): number {
+  const bal = getClientMetrics(clientId, division).outstanding;
+  return bal < 0 ? Math.abs(bal) : 0;
 }
 
 export async function recordPayment(paymentData: any) {

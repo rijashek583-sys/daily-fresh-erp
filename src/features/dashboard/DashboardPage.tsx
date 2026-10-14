@@ -23,6 +23,7 @@ export default function DashboardPage() {
   const { 
     computedTopClients, activeOrders,
     todaysRevenue, todaysOrders, totalClients, outstandingAmount,
+    totalAdvanceCredits,
     monthlyRev
   } = React.useMemo(() => {
     // Filter orders if a division is selected
@@ -50,8 +51,13 @@ export default function DashboardPage() {
     const todaysOrders = todaysValidOrders.length;
     const totalClients = activeClientsList.length;
     
-    // Outstanding amount across all clients — computed live from ledger store
-    const outstandingAmount = activeClientsList.reduce((sum, c) => sum + getClientOutstanding(c.id, activeTab), 0);
+    // Outstanding receivables across all clients (money owed to business)
+    const outstandingAmount = activeClientsList.reduce((sum, c) => sum + Math.max(0, getClientOutstanding(c.id, activeTab)), 0);
+    // Total advance credits held for clients (negative balances / overpayments)
+    const totalAdvanceCredits = activeClientsList.reduce((sum, c) => {
+      const bal = getClientOutstanding(c.id, activeTab);
+      return sum + (bal < 0 ? Math.abs(bal) : 0);
+    }, 0);
 
     const map = new Map<string, { name: string, orders: number, revenue: number, thisMonthRev: number, lastMonthRev: number, trend: number }>();
     const { ledger } = useDataStore.getState();
@@ -99,6 +105,7 @@ export default function DashboardPage() {
     return { 
       computedTopClients: top, activeOrders: validOrders,
       todaysRevenue, todaysOrders, totalClients, outstandingAmount,
+      totalAdvanceCredits,
       monthlyRev
     };
   }, [orders, clients, payments, products, activeTab, ledger]);
@@ -119,6 +126,8 @@ export default function DashboardPage() {
     const rows = activeClientsList.map(c => {
       const metrics = getClientMetrics(c.id, activeTab);
       const datePending = pendingDate ? (datePendingMap.get(c.id) || 0) : 0;
+      const receivable = Math.max(0, metrics.outstanding);
+      const credit = metrics.outstanding < 0 ? Math.abs(metrics.outstanding) : 0;
       return {
         clientId: c.id,
         clientName: c.name,
@@ -126,7 +135,9 @@ export default function DashboardPage() {
         totalOrders: metrics.totalOrders,
         totalInvoiced: metrics.totalInvoiced,
         totalPaid: metrics.totalPaid,
-        outstanding: metrics.outstanding,
+        outstanding: receivable,
+        credit,
+        rawBalance: metrics.outstanding,
         datePending,
       };
     }).filter(r => r.outstanding > 0 || (pendingDate && r.datePending > 0));
@@ -203,8 +214,9 @@ export default function DashboardPage() {
           <StatCard
             label="Outstanding Amount"
             value={formatCurrency(outstandingAmount)}
-            icon={<AlertCircle className="w-5 h-5" />}
-            iconBg="bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400"
+            subtitle={totalAdvanceCredits > 0 ? `${formatCurrency(totalAdvanceCredits)} in client credits` : undefined}
+            icon={outstandingAmount > 0 ? <AlertCircle className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
+            iconBg={outstandingAmount > 0 ? "bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400" : "bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400"}
           />
         </div>
         <Card padding={false}>
@@ -251,8 +263,9 @@ export default function DashboardPage() {
         <StatCard
           label="Outstanding"
           value={formatCurrency(outstandingAmount)}
-          icon={<AlertCircle className="w-5 h-5" />}
-          iconBg="bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400"
+          subtitle={totalAdvanceCredits > 0 ? `${formatCurrency(totalAdvanceCredits)} in client credits` : undefined}
+          icon={outstandingAmount > 0 ? <AlertCircle className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
+          iconBg={outstandingAmount > 0 ? "bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400" : "bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400"}
         />
         </div>
       )}

@@ -219,12 +219,14 @@ export default function ClientLedgerPage() {
             <Card className="flex flex-col justify-between relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-[var(--color-primary)]/5 rounded-full blur-2xl -translate-y-1/2 translate-x-1/3" />
               <div className="flex items-center gap-2 mb-4 relative">
-                <p className="text-sm font-bold text-[var(--color-text-muted)]">Outstanding Balance</p>
+                <p className="text-sm font-bold text-[var(--color-text-muted)]">
+                  {currentBalance > 0 ? 'Outstanding Balance' : currentBalance < 0 ? 'Advance Credit' : 'Current Balance'}
+                </p>
               </div>
               <div className="relative">
-                <p className={`text-3xl font-semibold tracking-tight ${currentBalance > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-[var(--color-success)]'}`}>{formatCurrency(Math.abs(currentBalance))}</p>
-                <Badge variant={currentBalance > 0 ? 'warning' : 'success'} className="mt-2 relative z-10">
-                  {currentBalance > 0 ? 'Receivable' : 'Settled'}
+                <p className={`text-3xl font-semibold tracking-tight ${currentBalance > 0 ? 'text-amber-600 dark:text-amber-400' : currentBalance < 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-[var(--color-text-main)]'}`}>{formatCurrency(Math.abs(currentBalance))}</p>
+                <Badge variant={currentBalance > 0 ? 'warning' : currentBalance < 0 ? 'success' : 'gray'} className="mt-2 relative z-10">
+                  {currentBalance > 0 ? 'Receivable' : currentBalance < 0 ? 'Advance Credit' : 'Settled'}
                 </Badge>
               </div>
             </Card>
@@ -275,8 +277,8 @@ export default function ClientLedgerPage() {
                         ) : <span className="text-gray-300 dark:text-gray-700">—</span>}
                       </td>
                       <td className="px-6 py-4 text-right">
-                        <span className={`text-sm font-semibold ${entry.balance > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-[var(--color-success)]'}`}>
-                          {formatCurrency(entry.balance)}
+                        <span className={`text-sm font-semibold ${entry.balance > 0 ? 'text-amber-600 dark:text-amber-400' : entry.balance < 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400'}`}>
+                          {entry.balance < 0 ? `${formatCurrency(Math.abs(entry.balance))} CR` : formatCurrency(entry.balance)}
                         </span>
                       </td>
                     </tr>
@@ -291,7 +293,9 @@ export default function ClientLedgerPage() {
                     <td colSpan={3} className="px-6 py-5 text-sm font-semibold text-[var(--color-primary)] uppercase tracking-wider">Current Balance</td>
                     <td className="px-6 py-5 text-right text-base font-semibold text-[var(--color-text-main)]">{formatCurrency(totalDebit)}</td>
                     <td className="px-6 py-5 text-right text-base font-semibold text-[var(--color-success)]">{formatCurrency(totalCredit)}</td>
-                    <td className="px-6 py-5 text-right text-lg font-semibold text-amber-600">{formatCurrency(currentBalance)}</td>
+                    <td className={`px-6 py-5 text-right text-lg font-semibold ${currentBalance > 0 ? 'text-amber-600' : currentBalance < 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400'}`}>
+                      {currentBalance < 0 ? `${formatCurrency(Math.abs(currentBalance))} CR` : formatCurrency(currentBalance)}
+                    </td>
                   </tr>
                 </tfoot>
               </table>

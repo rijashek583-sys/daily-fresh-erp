@@ -10,6 +10,7 @@ import { isToday, isThisMonth } from 'date-fns';
 import { useDivisionStore } from '../../stores/divisionStore';
 import { PageHeader, Card, StatCard, Badge, Button } from '../../components/ui';
 import { formatCurrency } from '../../lib/utils';
+import { getClientOutstanding } from '../../lib/billing';
 import { toast } from 'sonner';
 
 
@@ -24,12 +25,12 @@ const productSales = [
 ];
 
 export default function ReportsPage() {
-  const { orders, clients, payments } = useDataStore();
+  const { orders, clients, payments, ledger } = useDataStore();
   const { activeDivision } = useDivisionStore();
   const [dateRange, setDateRange] = useState('This Month');
 
 
-  const { totalRevenue, computedTopClients, outstandingPayments, dailyCollection, monthlyCollection, monthlyRev, productSalesData, totalProductSales } = React.useMemo(() => {
+  const { totalRevenue, computedTopClients, outstandingPayments, totalAdvanceCredits, dailyCollection, monthlyCollection, monthlyRev, productSalesData, totalProductSales } = React.useMemo(() => {
     const { ledger } = useDataStore.getState();
     const validPayments = payments.filter(p => {
       if (activeDivision === 'all') return true;
@@ -104,7 +105,12 @@ export default function ReportsPage() {
       }
     });
 
-    const outstanding = totalOpeningBalance + rev - totalCollected;
+    const activeClientsList = clients.filter(c => !c.deletedAt && c.status === 'active');
+    const outstanding = activeClientsList.reduce((sum, c) => sum + Math.max(0, getClientOutstanding(c.id, activeDivision)), 0);
+    const totalAdvanceCredits = activeClientsList.reduce((sum, c) => {
+      const bal = getClientOutstanding(c.id, activeDivision);
+      return sum + (bal < 0 ? Math.abs(bal) : 0);
+    }, 0);
     
     const dailyColl = validPayments
       .filter(p => isToday(new Date(p.billDate || p.createdAt)))
@@ -124,10 +130,10 @@ export default function ReportsPage() {
 
     return { 
       totalRevenue: rev, computedTopClients: top,
-      outstandingPayments: outstanding, dailyCollection: dailyColl, monthlyCollection: monthlyColl,
+      outstandingPayments: outstanding, totalAdvanceCredits, dailyCollection: dailyColl, monthlyCollection: monthlyColl,
       monthlyRev, productSalesData, totalProductSales
     };
-  }, [orders, clients, payments, activeDivision]);
+  }, [orders, clients, payments, activeDivision, ledger]);
 
   const CustomTooltip = ({ active, payload, label, prefix = '₹' }: any) => {
     if (!active || !payload?.length) return null;
@@ -180,7 +186,13 @@ export default function ReportsPage() {
       {/* KPI Summary */}
       <div className="grid grid-cols-4 gap-6 mb-8">
         <StatCard label="Total Revenue" value={formatCurrency(totalRevenue)} icon={<span className="font-serif italic text-xl">₹</span>} />
-        <StatCard label="Outstanding Payments" value={formatCurrency(outstandingPayments)} icon={<span className="font-semibold text-xl">Out</span>} iconBg="bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400" />
+        <StatCard
+          label="Outstanding Payments"
+          value={formatCurrency(outstandingPayments)}
+          subtitle={totalAdvanceCredits > 0 ? `${formatCurrency(totalAdvanceCredits)} in client credits` : undefined}
+          icon={<span className="font-semibold text-xl">{outstandingPayments > 0 ? 'Out' : '✓'}</span>}
+          iconBg={outstandingPayments > 0 ? "bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400" : "bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400"}
+        />
         <StatCard label="Daily Collection" value={formatCurrency(dailyCollection)} icon={<span className="font-semibold text-xl">Day</span>} iconBg="bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400" />
         <StatCard label="Monthly Collection" value={formatCurrency(monthlyCollection)} icon={<span className="font-semibold text-xl">Mon</span>} iconBg="bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400" />
       </div>
