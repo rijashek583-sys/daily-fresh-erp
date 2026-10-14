@@ -11,21 +11,22 @@ export interface BeforeInstallPromptEvent extends Event {
   prompt(): Promise<void>;
 }
 
-// Global reference so prompt is retained across route transitions and re-renders
+// Module-level singleton state so installation status is preserved across route transitions
 let globalPrompt: BeforeInstallPromptEvent | null = null;
-const listeners = new Set<(prompt: BeforeInstallPromptEvent | null) => void>();
+let globalIsInstalled = false;
+let globalIsStandalone = false;
+let globalPlatform: Platform = 'other';
+let isInitialized = false;
 
-if (typeof window !== 'undefined') {
-  window.addEventListener('beforeinstallprompt', (e) => {
-    // Prevent default mini-infobar on mobile and save prompt event
-    e.preventDefault();
-    globalPrompt = e as BeforeInstallPromptEvent;
-    listeners.forEach((fn) => fn(globalPrompt));
-  });
+const stateListeners = new Set<() => void>();
 
-  window.addEventListener('appinstalled', () => {
-    globalPrompt = null;
-    listeners.forEach((fn) => fn(null));
+function notifyListeners() {
+  stateListeners.forEach((fn) => {
+    try {
+      fn();
+    } catch {
+      // ignore
+    }
   });
 }
 
@@ -33,7 +34,7 @@ export function detectPlatform(): Platform {
   if (typeof window === 'undefined' || !window.navigator) return 'other';
   const ua = window.navigator.userAgent || '';
   if (/android/i.test(ua)) return 'android';
-  
+
   // Modern iPadOS 13+ devices identify as Macintosh but have touch points
   const isIPad =
     /macintosh/i.test(ua) &&
@@ -46,74 +47,109 @@ export function detectPlatform(): Platform {
   return 'other';
 }
 
+function checkStandaloneMode(): boolean {
+  if (typeof window === 'undefined') return false;
+  return (
+    window.matchMedia('(display-mode: standalone)').matches ||
+    window.matchMedia('(display-mode: minimal-ui)').matches ||
+    window.matchMedia('(display-mode: window-controls-overlay)').matches ||
+    (window.navigator as unknown as { standalone?: boolean }).standalone === true ||
+    (typeof document !== 'undefined' && document.referrer.startsWith('android-app://'))
+  );
+}
+
+function initPwaState() {
+  if (isInitialized || typeof window === 'undefined') return;
+  isInitialized = true;
+
+  globalPlatform = detectPlatform();
+  globalIsStandalone = checkStandaloneMode();
+  if (globalIsStandalone) {
+    globalIsInstalled = true;
+  }
+
+  // Check supported Chromium getInstalledRelatedApps API
+  if ('getInstalledRelatedApps' in window.navigator) {
+    (navigator as unknown as { getInstalledRelatedApps: () => Promise<unknown[]> })
+      .getInstalledRelatedApps()
+      .then((apps) => {
+        if (Array.isArray(apps) && apps.length > 0) {
+          globalIsInstalled = true;
+          notifyListeners();
+        }
+      })
+      .catch(() => {});
+  }
+
+  // Single module-level beforeinstallprompt listener
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    globalPrompt = e as BeforeInstallPromptEvent;
+    notifyListeners();
+  });
+
+  // Single module-level appinstalled listener (confirmed by browser)
+  window.addEventListener('appinstalled', () => {
+    globalPrompt = null;
+    globalIsInstalled = true;
+    notifyListeners();
+  });
+
+  // Single module-level display-mode change listener
+  const mediaQuery = window.matchMedia('(display-mode: standalone)');
+  const handleModeChange = (e: MediaQueryListEvent) => {
+    if (e.matches) {
+      globalIsStandalone = true;
+      globalIsInstalled = true;
+      notifyListeners();
+    }
+  };
+
+  if (mediaQuery.addEventListener) {
+    mediaQuery.addEventListener('change', handleModeChange);
+  } else if ((mediaQuery as unknown as { addListener?: (fn: (e: MediaQueryListEvent) => void) => void }).addListener) {
+    (mediaQuery as unknown as { addListener: (fn: (e: MediaQueryListEvent) => void) => void }).addListener(handleModeChange);
+  }
+}
+
 export function usePwaInstall() {
+  initPwaState();
+
   const [prompt, setPrompt] = useState<BeforeInstallPromptEvent | null>(globalPrompt);
-  const [isStandalone, setIsStandalone] = useState<boolean>(false);
-  const [isInstalled, setIsInstalled] = useState<boolean>(false);
+  const [isStandalone, setIsStandalone] = useState<boolean>(globalIsStandalone);
+  const [isInstalled, setIsInstalled] = useState<boolean>(globalIsInstalled || globalIsStandalone);
+  const [platform, setPlatform] = useState<Platform>(globalPlatform);
   const [showInstructions, setShowInstructions] = useState<boolean>(false);
-  const [platform, setPlatform] = useState<Platform>('other');
 
   useEffect(() => {
-    // Check standalone mode (PWA window or homescreen app)
-    const checkStandalone = () => {
-      const standalone =
-        window.matchMedia('(display-mode: standalone)').matches ||
-        (window.navigator as unknown as { standalone?: boolean }).standalone === true ||
-        document.referrer.includes('android-app://');
-      setIsStandalone(standalone);
-      if (standalone) setIsInstalled(true);
+    const sync = () => {
+      setPrompt(globalPrompt);
+      setIsStandalone(globalIsStandalone);
+      setIsInstalled(globalIsInstalled || globalIsStandalone);
+      setPlatform(globalPlatform);
     };
 
-    checkStandalone();
-    setPlatform(detectPlatform());
-
-    // Listen to display-mode changes
-    const mediaQuery = window.matchMedia('(display-mode: standalone)');
-    const handleModeChange = (e: MediaQueryListEvent) => {
-      if (e.matches) {
-        setIsStandalone(true);
-        setIsInstalled(true);
-      }
-    };
-    if (mediaQuery.addEventListener) {
-      mediaQuery.addEventListener('change', handleModeChange);
-    } else if ((mediaQuery as unknown as { addListener?: (fn: (e: MediaQueryListEvent) => void) => void }).addListener) {
-      (mediaQuery as unknown as { addListener: (fn: (e: MediaQueryListEvent) => void) => void }).addListener(handleModeChange);
-    }
-
-    const updatePrompt = (p: BeforeInstallPromptEvent | null) => {
-      setPrompt(p);
-    };
-
-    listeners.add(updatePrompt);
-
-    const onAppInstalled = () => {
-      setIsInstalled(true);
-      setShowInstructions(false);
-    };
-
-    window.addEventListener('appinstalled', onAppInstalled);
+    stateListeners.add(sync);
+    sync();
 
     return () => {
-      if (mediaQuery.removeEventListener) {
-        mediaQuery.removeEventListener('change', handleModeChange);
-      } else if ((mediaQuery as unknown as { removeListener?: (fn: (e: MediaQueryListEvent) => void) => void }).removeListener) {
-        (mediaQuery as unknown as { removeListener: (fn: (e: MediaQueryListEvent) => void) => void }).removeListener(handleModeChange);
-      }
-      listeners.delete(updatePrompt);
-      window.removeEventListener('appinstalled', onAppInstalled);
+      stateListeners.delete(sync);
     };
   }, []);
 
-  const triggerInstall = useCallback(async (): Promise<'prompted' | 'instructions'> => {
-    if (prompt) {
+  const triggerInstall = useCallback(async (): Promise<'prompted' | 'instructions' | 'already-installed'> => {
+    if (globalIsStandalone || globalIsInstalled) {
+      return 'already-installed';
+    }
+
+    if (globalPrompt) {
       try {
-        await prompt.prompt();
-        const choice = await prompt.userChoice;
+        await globalPrompt.prompt();
+        const choice = await globalPrompt.userChoice;
         if (choice.outcome === 'accepted') {
           globalPrompt = null;
-          setPrompt(null);
-          setIsInstalled(true);
+          globalIsInstalled = true;
+          notifyListeners();
           return 'prompted';
         }
         return 'prompted';
@@ -123,16 +159,18 @@ export function usePwaInstall() {
         return 'instructions';
       }
     } else {
-      // Browser doesn't support or haven't fired beforeinstallprompt
+      // Browser doesn't support or has not fired beforeinstallprompt
       setShowInstructions(true);
       return 'instructions';
     }
-  }, [prompt]);
+  }, []);
+
+  const effectiveInstalled = isInstalled || isStandalone;
 
   return {
     isStandalone,
-    isInstalled,
-    hasNativePrompt: !!prompt,
+    isInstalled: effectiveInstalled,
+    hasNativePrompt: !!prompt && !effectiveInstalled,
     platform,
     showInstructions,
     setShowInstructions,

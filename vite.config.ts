@@ -21,7 +21,7 @@ export default defineConfig({
       ],
       manifest: {
         id: '/',
-        name: 'Daily Fresh',
+        name: 'Daily Fresh ERP',
         short_name: 'Daily Fresh',
         description: 'Daily Fresh ERP — Operations management for food production and billing.',
         theme_color: '#B91C1C',

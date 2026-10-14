@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   X, Smartphone, Monitor, Download, CheckCircle2,
-  Share2, ShieldCheck, HelpCircle
+  Share2, ShieldCheck, Laptop
 } from 'lucide-react';
 import { type Platform } from '../../hooks/usePwaInstall';
 import { Button } from '../ui';
@@ -22,12 +22,13 @@ export default function InstallInstructionsModal({
   onTriggerNativePrompt,
 }: InstallInstructionsModalProps) {
   // Default tab to detected platform
-  const initialTab: 'android' | 'windows' | 'ios' =
+  const initialTab: 'android' | 'ios' | 'windows' | 'macos' =
     detectedPlatform === 'ios' ? 'ios' :
-    detectedPlatform === 'windows' || detectedPlatform === 'macos' ? 'windows' :
+    detectedPlatform === 'windows' ? 'windows' :
+    detectedPlatform === 'macos' ? 'macos' :
     'android';
 
-  const [activeTab, setActiveTab] = useState<'android' | 'windows' | 'ios'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'android' | 'ios' | 'windows' | 'macos'>(initialTab);
 
   if (!isOpen) return null;
 
@@ -58,7 +59,7 @@ export default function InstallInstructionsModal({
                 Install Daily Fresh App
               </h3>
               <p className="text-xs text-[var(--color-text-muted)] font-medium mt-0.5">
-                Fast standalone app for iPhone, iPad, Android &amp; Windows
+                Fast standalone app for Android, iOS, Windows &amp; Mac
               </p>
             </div>
           </div>
@@ -73,53 +74,69 @@ export default function InstallInstructionsModal({
         </div>
 
         {/* Platform Selector Tabs */}
-        <div className="px-6 pt-4 border-b border-gray-100 dark:border-gray-800/60 bg-gray-50/30 dark:bg-gray-900/20">
-          <div className="flex gap-2">
+        <div className="px-6 pt-4 border-b border-gray-100 dark:border-gray-800/60 bg-gray-50/30 dark:bg-gray-900/20 overflow-x-auto no-scrollbar">
+          <div className="flex gap-2 min-w-max pb-1">
             <button
               type="button"
               onClick={() => setActiveTab('android')}
-              className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-xs font-bold transition-all border ${
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all border ${
                 activeTab === 'android'
                   ? 'bg-[var(--color-primary)] text-white border-[var(--color-primary)] shadow-sm'
                   : 'bg-[var(--color-card)] text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800'
               }`}
             >
-              <Smartphone className="w-3.5 h-3.5" />
+              <Smartphone className="w-3.5 h-3.5 shrink-0" />
               <span>Android</span>
               {detectedPlatform === 'android' && (
-                <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-white/20 font-semibold">Your device</span>
+                <span className="text-[9px] px-1 py-0.2 rounded-md bg-white/20 font-semibold">You</span>
               )}
             </button>
 
             <button
               type="button"
               onClick={() => setActiveTab('ios')}
-              className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-xs font-bold transition-all border ${
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all border ${
                 activeTab === 'ios'
                   ? 'bg-[var(--color-primary)] text-white border-[var(--color-primary)] shadow-sm'
                   : 'bg-[var(--color-card)] text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800'
               }`}
             >
-              <Share2 className="w-3.5 h-3.5" />
+              <Share2 className="w-3.5 h-3.5 shrink-0" />
               <span>iPhone / iPad</span>
               {detectedPlatform === 'ios' && (
-                <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-white/20 font-semibold">Your device</span>
+                <span className="text-[9px] px-1 py-0.2 rounded-md bg-white/20 font-semibold">You</span>
               )}
             </button>
 
             <button
               type="button"
               onClick={() => setActiveTab('windows')}
-              className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-xs font-bold transition-all border ${
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all border ${
                 activeTab === 'windows'
                   ? 'bg-[var(--color-primary)] text-white border-[var(--color-primary)] shadow-sm'
                   : 'bg-[var(--color-card)] text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800'
               }`}
             >
-              <Monitor className="w-3.5 h-3.5" />
+              <Monitor className="w-3.5 h-3.5 shrink-0" />
               <span>Windows PC</span>
-              {(detectedPlatform === 'windows' || detectedPlatform === 'macos') && (
-                <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-white/20 font-semibold">Your device</span>
+              {detectedPlatform === 'windows' && (
+                <span className="text-[9px] px-1 py-0.2 rounded-md bg-white/20 font-semibold">You</span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('macos')}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all border ${
+                activeTab === 'macos'
+                  ? 'bg-[var(--color-primary)] text-white border-[var(--color-primary)] shadow-sm'
+                  : 'bg-[var(--color-card)] text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800'
+              }`}
+            >
+              <Laptop className="w-3.5 h-3.5 shrink-0" />
+              <span>macOS</span>
+              {detectedPlatform === 'macos' && (
+                <span className="text-[9px] px-1 py-0.2 rounded-md bg-white/20 font-semibold">You</span>
               )}
             </button>
           </div>
@@ -159,7 +176,7 @@ export default function InstallInstructionsModal({
           {activeTab === 'android' && (
             <div className="space-y-3">
               <p className="text-xs font-bold text-[var(--color-text-main)] uppercase tracking-wider">
-                How to Install on Android (Chrome / Edge)
+                How to Install on Android (Chrome / Edge / Samsung Internet)
               </p>
               <ol className="space-y-2.5 text-xs text-[var(--color-text-main)]">
                 <li className="flex items-start gap-3 p-3 rounded-2xl bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-800">
@@ -169,7 +186,7 @@ export default function InstallInstructionsModal({
                   <div>
                     <p className="font-bold">Open Daily Fresh in Google Chrome</p>
                     <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
-                      Ensure you are viewing this page in Google Chrome or Microsoft Edge on your Android phone.
+                      Ensure you are viewing the page in Google Chrome or Microsoft Edge on your Android phone.
                     </p>
                   </div>
                 </li>
@@ -323,6 +340,52 @@ export default function InstallInstructionsModal({
                     <p className="font-bold">Tap &ldquo;Add&rdquo;</p>
                     <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
                       Tap <strong>Add</strong> in the top-right corner. Daily Fresh will appear as an app icon on your home screen and run in clean full-screen standalone mode.
+                    </p>
+                  </div>
+                </li>
+              </ol>
+            </div>
+          )}
+
+          {/* macOS Step-by-Step */}
+          {activeTab === 'macos' && (
+            <div className="space-y-3">
+              <p className="text-xs font-bold text-[var(--color-text-main)] uppercase tracking-wider">
+                How to Install on macOS (Safari / Chrome / Edge)
+              </p>
+              <ol className="space-y-2.5 text-xs text-[var(--color-text-main)]">
+                <li className="flex items-start gap-3 p-3 rounded-2xl bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-800">
+                  <span className="w-6 h-6 rounded-full bg-red-100 dark:bg-red-900/40 text-[var(--color-primary)] font-bold flex items-center justify-center shrink-0">
+                    1
+                  </span>
+                  <div>
+                    <p className="font-bold">Option A: In Safari (macOS Sonoma 14+)</p>
+                    <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
+                      Open the app URL in Safari. In the macOS top menu bar, click <strong>File</strong> &rarr; <strong>Add to Dock…</strong>, then click <strong>Add</strong>. Daily Fresh will be pinned to your Mac Dock and Launchpad.
+                    </p>
+                  </div>
+                </li>
+
+                <li className="flex items-start gap-3 p-3 rounded-2xl bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-800">
+                  <span className="w-6 h-6 rounded-full bg-red-100 dark:bg-red-900/40 text-[var(--color-primary)] font-bold flex items-center justify-center shrink-0">
+                    2
+                  </span>
+                  <div>
+                    <p className="font-bold">Option B: In Google Chrome or Microsoft Edge</p>
+                    <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
+                      Click the <strong>Install</strong> icon on the right side of the URL address bar (or click menu <strong>⋮</strong> &rarr; <strong>Save and share</strong> &rarr; <strong>Install Daily Fresh</strong>).
+                    </p>
+                  </div>
+                </li>
+
+                <li className="flex items-start gap-3 p-3 rounded-2xl bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-800">
+                  <span className="w-6 h-6 rounded-full bg-red-100 dark:bg-red-900/40 text-[var(--color-primary)] font-bold flex items-center justify-center shrink-0">
+                    3
+                  </span>
+                  <div>
+                    <p className="font-bold">Launch as Dedicated Mac App</p>
+                    <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
+                      Daily Fresh runs in its own frameless window with independent Command+Tab switching and Mac notifications.
                     </p>
                   </div>
                 </li>

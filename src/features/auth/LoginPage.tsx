@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { Button, Input } from '../../components/ui';
 import InstallAppButton from '../../components/pwa/InstallAppButton';
+import { usePwaInstall } from '../../hooks/usePwaInstall';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -11,6 +12,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const { login, user } = useAuthStore();
   const navigate = useNavigate();
+  const { isInstalled, isStandalone } = usePwaInstall();
 
   React.useEffect(() => {
     if (user) {
@@ -32,12 +34,16 @@ export default function LoginPage() {
     }
   };
 
+  const showInstall = !isInstalled && !isStandalone;
+
   return (
     <div className="min-h-screen flex bg-[var(--color-bg)] relative">
       {/* Top Right Corner Install Button */}
-      <div className="absolute top-5 right-5 sm:top-8 sm:right-8 z-20">
-        <InstallAppButton variant="login-corner" />
-      </div>
+      {showInstall && (
+        <div className="absolute top-5 right-5 sm:top-8 sm:right-8 z-20">
+          <InstallAppButton variant="login-corner" />
+        </div>
+      )}
 
       {/* Left side - Brand */}
       <div className="hidden lg:flex flex-1 flex-col justify-center items-center bg-[var(--color-primary)] relative overflow-hidden">
@@ -105,9 +111,11 @@ export default function LoginPage() {
           </form>
 
           {/* Prominent App Install Banner */}
-          <div className="mt-8 pt-6 border-t border-gray-100 dark:border-gray-800">
-            <InstallAppButton variant="login-banner" />
-          </div>
+          {showInstall && (
+            <div className="mt-8 pt-6 border-t border-gray-100 dark:border-gray-800">
+              <InstallAppButton variant="login-banner" />
+            </div>
+          )}
 
         </div>
       </div>

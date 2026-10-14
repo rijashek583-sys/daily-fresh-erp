@@ -1,13 +1,14 @@
 import { useState } from 'react';
-import { Save, User, Bell, Moon, Sun, Shield, Building2, ChevronRight, Check, Trash2, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Save, User, Bell, Moon, Sun, Shield, Building2, ChevronRight, Check, Trash2, AlertTriangle, RefreshCw, Download } from 'lucide-react';
 import { Button, Card, Input, Select, PageHeader, Avatar } from '../../components/ui';
 import { useAuthStore } from '../../stores/authStore';
 import { useUIStore } from '../../stores/uiStore';
 import { toast } from 'sonner';
 import { useDataStore } from '../../stores/dataStore';
 import { getTestDataSummary, cleanupTestData, type TestDataSummary } from '../../services/db';
+import AppInstallationSection from './AppInstallationSection';
 
-type SettingsTab = 'profile' | 'company' | 'notifications' | 'appearance' | 'security' | 'advanced';
+type SettingsTab = 'profile' | 'company' | 'notifications' | 'appearance' | 'security' | 'install' | 'advanced';
 
 export default function SettingsPage() {
   const { user } = useAuthStore();
@@ -23,7 +24,10 @@ export default function SettingsPage() {
     { id: 'notifications', label: 'Notifications', icon: Bell },
     { id: 'appearance', label: 'Appearance', icon: Moon },
     { id: 'security', label: 'Security', icon: Shield },
-    ...(isAdmin ? [{ id: 'advanced' as SettingsTab, label: 'Advanced', icon: Shield }] : []),
+    ...(isAdmin ? [
+      { id: 'install' as SettingsTab, label: 'App & Sharing', icon: Download },
+      { id: 'advanced' as SettingsTab, label: 'Advanced', icon: Shield },
+    ] : []),
   ];
 
   const handleSave = async (e: React.FormEvent) => {
@@ -112,9 +116,11 @@ export default function SettingsPage() {
         title="Settings"
         description="Manage your account settings and preferences."
         actions={
-          <Button type="submit" form="settings-form" size="md" loading={loading} icon={<Save className="w-4 h-4" />}>
-            Save Changes
-          </Button>
+          activeTab !== 'install' && activeTab !== 'advanced' ? (
+            <Button type="submit" form="settings-form" size="md" loading={loading} icon={<Save className="w-4 h-4" />}>
+              Save Changes
+            </Button>
+          ) : undefined
         }
       />
 
@@ -236,6 +242,10 @@ export default function SettingsPage() {
                   <h3 className="text-lg font-semibold text-[var(--color-text-main)] mb-1">Coming Soon</h3>
                   <p className="text-sm font-medium text-[var(--color-text-muted)]">These settings are not yet available in the demo.</p>
                 </div>
+              )}
+
+              {activeTab === 'install' && isAdmin && (
+                <AppInstallationSection />
               )}
 
               {activeTab === 'advanced' && (
