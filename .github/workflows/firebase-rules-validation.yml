@@ -6,6 +6,7 @@ on:
     paths:
       - 'firestore.staged.rules'
       - 'firestore.rules'
+      - 'firebase.financial.json'
       - 'emulator/**'
       - '.github/workflows/firebase-rules-validation.yml'
   pull_request:
@@ -13,6 +14,7 @@ on:
     paths:
       - 'firestore.staged.rules'
       - 'firestore.rules'
+      - 'firebase.financial.json'
       - 'emulator/**'
       - '.github/workflows/firebase-rules-validation.yml'
   workflow_dispatch:
@@ -32,10 +34,10 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Setup Node.js (v20)
+      - name: Setup Node.js (v22)
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -48,6 +50,6 @@ jobs:
         run: |
           npx firebase-tools emulators:exec \
             --project demo-daily-fresh-rules-test \
-            --config emulator/firebase.financial.local.json \
+            --config firebase.financial.json \
             --only firestore \
             "node --test emulator/rules.staged.test.mjs"
