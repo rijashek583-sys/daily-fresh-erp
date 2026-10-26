@@ -1,0 +1,62 @@
+{
+  "version": "1.0.12",
+  "buildId": "v1.0.12-20261026-r1",
+  "name": "Daily Fresh ERP",
+  "releaseDate": "2026-10-23T11:55:00.000Z",
+  "releaseNotes": "Daily Fresh ERP v1.0.12: Production release featuring Division-wise Balance Receivable reports (All / Primary / Bakery), Admin-only Expense Void with mandatory audit trail and active total isolation, and Excel-compatible RFC 4180 CSV exports for Staff Collections and Expenses.",
+  "repository": "https://github.com/rijashek583-sys/daily-fresh-erp",
+  "releasesPage": "https://github.com/rijashek583-sys/daily-fresh-erp/releases",
+  "features": {
+    "product_sales_report": true,
+    "division_breakdown": true,
+    "balance_receivable_report": true,
+    "daily_billing": true,
+    "client_ledger": true,
+    "bulk_ordering": true,
+    "payments_collection": true,
+    "staff_management": true,
+    "client_management": true,
+    "product_management": true,
+    "expense_tracker": true,
+    "expense_void_audit": true,
+    "csv_exports": true,
+    "trash_recovery": true,
+    "app_update_system": true,
+    "windows_desktop_updater": true,
+    "android_native_updater": true
+  },
+  "platforms": {
+    "windows": {
+      "version": "1.0.12",
+      "downloadUrl": "https://firebasestorage.googleapis.com/v0/b/daily-fresh-billing-system.firebasestorage.app/o/releases%2Fv1.0.12%2FDailyFresh-Setup.exe?alt=media&token=280b553e-9200-43bf-a16f-33e2c6b8a0ca",
+      "directVersionUrl": "https://firebasestorage.googleapis.com/v0/b/daily-fresh-billing-system.firebasestorage.app/o/releases%2Fv1.0.12%2FDailyFresh-Setup.exe?alt=media&token=280b553e-9200-43bf-a16f-33e2c6b8a0ca",
+      "stableDownloadUrl": "https://firebasestorage.googleapis.com/v0/b/daily-fresh-billing-system.firebasestorage.app/o/releases%2FDailyFresh-Setup.exe?alt=media",
+      "downloadToken": "280b553e-9200-43bf-a16f-33e2c6b8a0ca",
+      "storagePath": "releases/v1.0.12/DailyFresh-Setup.exe",
+      "fileName": "DailyFresh-Setup.exe",
+      "fileSizeBytes": 113844667,
+      "fileSizeFormatted": "108.6 MB",
+      "sha256": "8C682BE52B7DC9282DB361B8420A0C340121DA5DA9D251C9CD69DA1EB25664AD",
+      "mandatory": true
+    },
+    "android": {
+      "version": "1.0.12",
+      "versionCode": 12,
+      "downloadUrl": "https://firebasestorage.googleapis.com/v0/b/daily-fresh-billing-system.firebasestorage.app/o/releases%2Fv1.0.12%2FDailyFresh.apk?alt=media&token=b4be69a3-47a0-4854-a746-dc5972c4054e",
+      "directVersionUrl": "https://firebasestorage.googleapis.com/v0/b/daily-fresh-billing-system.firebasestorage.app/o/releases%2Fv1.0.12%2FDailyFresh.apk?alt=media&token=b4be69a3-47a0-4854-a746-dc5972c4054e",
+      "stableDownloadUrl": "https://firebasestorage.googleapis.com/v0/b/daily-fresh-billing-system.firebasestorage.app/o/releases%2FDailyFresh.apk?alt=media",
+      "downloadToken": "b4be69a3-47a0-4854-a746-dc5972c4054e",
+      "storagePath": "releases/v1.0.12/DailyFresh.apk",
+      "fileName": "DailyFresh.apk",
+      "fileSizeBytes": 17119257,
+      "fileSizeFormatted": "16.3 MB",
+      "sha256": "DD772EA14725F3389BAD82661A0FB5DC7F5EF30A90FEE14A0EDAAEFB5E2646DC",
+      "mandatory": true
+    },
+    "web": {
+      "version": "1.0.12",
+      "buildId": "v1.0.12-20261026-r1",
+      "canonicalUrl": "https://daily-fresh-billing-system.web.app"
+    }
+  }
+}
