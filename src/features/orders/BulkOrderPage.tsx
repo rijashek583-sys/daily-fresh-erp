@@ -754,7 +754,7 @@ export default function BulkOrderPage() {
           </div>
 
           {/* ── Save / footer bar ── */}
-          <div className="sticky bottom-0 px-6 py-3.5 border-t border-gray-100 dark:border-gray-800 bg-[var(--color-card)] flex flex-col sm:flex-row items-center justify-between gap-4 z-40">
+          <div className="sticky bottom-[calc(4rem+env(safe-area-inset-bottom,0px))] md:bottom-0 px-6 py-3.5 border-t border-gray-100 dark:border-gray-800 bg-[var(--color-card)] flex flex-col sm:flex-row items-center justify-between gap-4 z-40 shadow-md">
             <div>
               <p className="text-xs font-semibold text-[var(--color-text-muted)]">
                 {pendingShops.length} shop(s) ready to save&nbsp;&middot;&nbsp;{totalItemCount} item(s)

@@ -1,11 +1,12 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Package, ShoppingCart,
-  BarChart3, Settings, BookOpen, ChevronRight, Receipt, Trash2, CreditCard, UserCheck
+  BarChart3, Settings, BookOpen, ChevronRight, Receipt, Trash2, CreditCard, UserCheck, RefreshCw, ReceiptText
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useAuthStore } from '../../stores/authStore';
 import InstallAppButton from '../pwa/InstallAppButton';
+import { triggerAppUpdateCheck } from '../../services/appUpdateService';
 
 interface NavItem {
   label: string;
@@ -21,6 +22,7 @@ const adminNavItems: NavItem[] = [
   { label: 'Staff', href: '/staff', icon: UserCheck },
   { label: 'Products', href: '/products', icon: Package },
   { label: 'Daily Bill', href: '/billing', icon: Receipt },
+  { label: 'Expenses', href: '/expenses', icon: ReceiptText },
   { label: 'Client Ledger', href: '/ledger', icon: BookOpen },
   { label: 'Reports', href: '/reports', icon: BarChart3 },
   { label: 'Settings', href: '/settings', icon: Settings },
@@ -28,9 +30,10 @@ const adminNavItems: NavItem[] = [
 ];
 
 const staffNavItems: NavItem[] = [
+  { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { label: 'Clients', href: '/clients', icon: Users },
-  { label: 'Orders', href: '/orders', icon: ShoppingCart },
-  { label: 'Payments / Collection', href: '/payments', icon: CreditCard },
+  { label: 'Payment & Collection', href: '/payments', icon: CreditCard },
+  { label: 'My Expenses', href: '/expenses', icon: ReceiptText },
 ];
 
 export default function Sidebar() {
@@ -88,8 +91,17 @@ export default function Sidebar() {
       <div className="p-4 border-t border-black/[0.04] dark:border-white/[0.04] space-y-2">
         <InstallAppButton variant="sidebar" />
         <button
+          type="button"
+          onClick={() => triggerAppUpdateCheck()}
+          className="w-full flex items-center gap-3.5 px-4 py-3 rounded-2xl text-sm font-semibold text-gray-600 dark:text-gray-300 hover:bg-gray-200/50 dark:hover:bg-gray-800/50 hover:text-gray-900 dark:hover:text-white transition-all duration-200 cursor-pointer"
+          id="desktop-sidebar-check-updates-button"
+        >
+          <RefreshCw className="w-5 h-5 text-gray-400" />
+          <span>Check for Updates</span>
+        </button>
+        <button
           onClick={() => useAuthStore.getState().logout()}
-          className="w-full flex items-center gap-3.5 px-4 py-3.5 rounded-2xl text-sm font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-200"
+          className="w-full flex items-center gap-3.5 px-4 py-3 rounded-2xl text-sm font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-200 cursor-pointer"
         >
           Logout
         </button>

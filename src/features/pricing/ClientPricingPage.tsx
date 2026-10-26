@@ -156,7 +156,7 @@ export default function ClientPricingPage() {
                   value={selectedRegion}
                   onChange={e => handleRegionChange(e.target.value)}
                   className="w-full pl-10 pr-8 py-3 text-sm rounded-2xl transition-all duration-200 outline-none font-medium appearance-none bg-no-repeat bg-[var(--color-input-bg)] text-[var(--color-text-main)] border-2 border-transparent focus:border-[var(--color-primary)] focus:bg-[var(--color-card)] shadow-sm"
-                  style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239CA3AF'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`, backgroundPosition: 'right 1rem center', backgroundSize: '1.25rem 1.25rem' }}
+                  style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239CA3AF'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`, backgroundPosition: 'right 1rem center', backgroundSize: '1.25rem 1.25rem', backgroundRepeat: 'no-repeat' }}
                 >
                   <option value="" disabled>Choose Region</option>
                   {REGIONS.map(r => (
@@ -176,7 +176,7 @@ export default function ClientPricingPage() {
                 onChange={e => handleClientChange(e.target.value)}
                 disabled={!selectedRegion}
                 className={`w-full px-4 py-3 text-sm rounded-2xl transition-all duration-200 outline-none font-medium appearance-none bg-no-repeat border-2 border-transparent shadow-sm ${!selectedRegion ? 'bg-gray-100 dark:bg-gray-800 text-gray-400 cursor-not-allowed' : 'bg-[var(--color-input-bg)] text-[var(--color-text-main)] focus:border-[var(--color-primary)] focus:bg-[var(--color-card)]'}`}
-                style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239CA3AF'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`, backgroundPosition: 'right 1rem center', backgroundSize: '1.25rem 1.25rem' }}
+                style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239CA3AF'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`, backgroundPosition: 'right 1rem center', backgroundSize: '1.25rem 1.25rem', backgroundRepeat: 'no-repeat' }}
               >
                 {!selectedRegion ? (
                   <option value="">Please select a region first</option>

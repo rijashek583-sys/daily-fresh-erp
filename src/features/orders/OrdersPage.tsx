@@ -10,7 +10,8 @@ import {
   ShoppingBag, 
   AlertTriangle, 
   AlertCircle, 
-  Loader2 
+  Loader2,
+  Printer
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
@@ -24,9 +25,10 @@ import { formatCurrency, getProductDivision, cn } from '../../lib/utils';
 import RecordPaymentModal from '../../components/payments/RecordPaymentModal';
 import OrderPaymentHistoryModal from '../../components/payments/OrderPaymentHistoryModal';
 import DirectSaleModal from '../../components/orders/DirectSaleModal';
+import { printOrderInvoice } from '../../lib/invoicePrint';
 
 export default function OrdersPage() {
-  const { clients, orders, regions, products, payments } = useDataStore();
+  const { clients, orders, regions, products, payments, ledger } = useDataStore();
   const navigate = useNavigate();
   const { user } = useAuthStore();
   const isAdmin = user?.role === 'admin';
@@ -413,7 +415,8 @@ export default function OrdersPage() {
       key: 'paid', label: 'Paid', align: 'right',
       render: r => {
         const orderPayments = payments.filter(p => !p.deletedAt && p.invoiceId === r.id);
-        const paid = orderPayments.reduce((s, p) => s + (p.appliedAmount !== undefined ? p.appliedAmount : (p.amount || 0)), 0);
+        const paymentsPaid = orderPayments.reduce((s, p) => s + (p.appliedAmount !== undefined ? p.appliedAmount : (p.amount || 0)), 0);
+        const paid = Math.max(paymentsPaid, r.paidAmount || 0);
         return (
           <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">
             {formatCurrency(paid)}
@@ -425,11 +428,13 @@ export default function OrdersPage() {
       key: 'pending', label: 'Pending', align: 'right',
       render: r => {
         const orderPayments = payments.filter(p => !p.deletedAt && p.invoiceId === r.id);
-        const paid = orderPayments.reduce((s, p) => s + (p.appliedAmount !== undefined ? p.appliedAmount : (p.amount || 0)), 0);
-        const credit = r.creditApplied || 0;
+        const paymentsPaid = orderPayments.reduce((s, p) => s + (p.appliedAmount !== undefined ? p.appliedAmount : (p.amount || 0)), 0);
+        const paid = Math.max(paymentsPaid, r.paidAmount || 0);
+        const credit = r.creditApplied || ((r.primaryCreditApplied || 0) + (r.bakeryCreditApplied || 0)) || 0;
         const netDue = Math.max(0, r.total - credit);
-        const pending = Math.max(0, netDue - paid);
-        return pending <= 0.01 ? (
+        const isPaid = r.paymentStatus === 'paid' || (netDue - paid) <= 0.01;
+        const pending = isPaid ? 0 : Math.max(0, netDue - paid);
+        return isPaid ? (
           <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full whitespace-nowrap">
             Paid
           </span>
@@ -444,10 +449,12 @@ export default function OrdersPage() {
       key: 'actions', label: '', align: 'right',
       render: r => {
         const orderPayments = payments.filter(p => !p.deletedAt && p.invoiceId === r.id);
-        const paid = orderPayments.reduce((s, p) => s + (p.appliedAmount !== undefined ? p.appliedAmount : (p.amount || 0)), 0);
-        const credit = r.creditApplied || 0;
+        const paymentsPaid = orderPayments.reduce((s, p) => s + (p.appliedAmount !== undefined ? p.appliedAmount : (p.amount || 0)), 0);
+        const paid = Math.max(paymentsPaid, r.paidAmount || 0);
+        const credit = r.creditApplied || ((r.primaryCreditApplied || 0) + (r.bakeryCreditApplied || 0)) || 0;
         const netDue = Math.max(0, r.total - credit);
-        const pending = Math.max(0, netDue - paid);
+        const isPaid = r.paymentStatus === 'paid' || (netDue - paid) <= 0.01;
+        const pending = isPaid ? 0 : Math.max(0, netDue - paid);
 
         return (
           <div className="flex items-center justify-end gap-2 whitespace-nowrap">
@@ -467,8 +474,22 @@ export default function OrdersPage() {
               </button>
             )}
 
+            {/* View / Print Unified Invoice */}
+            <button
+              type="button"
+              onClick={() => {
+                const client = clients.find(c => c.id === r.clientId) || null;
+                printOrderInvoice({ order: r, client, payments, products, ledger });
+              }}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-bold text-gray-700 hover:text-gray-900 hover:bg-gray-100 dark:text-gray-300 dark:hover:text-white dark:hover:bg-gray-800 transition-colors border border-gray-200 dark:border-gray-700 shadow-xs"
+              title="Print / View Invoice"
+            >
+              <Printer className="w-3.5 h-3.5 text-red-600 dark:text-red-400" />
+              <span>Invoice</span>
+            </button>
+
             {/* Record Payment */}
-            {pending > 0.01 && (
+            {!isPaid && pending > 0.01 && (
               <button
                 type="button"
                 onClick={() => {

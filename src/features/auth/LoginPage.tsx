@@ -4,6 +4,9 @@ import { useAuthStore } from '../../stores/authStore';
 import { Button, Input } from '../../components/ui';
 import InstallAppButton from '../../components/pwa/InstallAppButton';
 import { usePwaInstall } from '../../hooks/usePwaInstall';
+import { isInstalledAppRuntime, OFFICIAL_DISTRIBUTION } from '../../config/distribution';
+import { triggerAppUpdateCheck } from '../../services/appUpdateService';
+import { RefreshCw } from 'lucide-react';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -34,7 +37,7 @@ export default function LoginPage() {
     }
   };
 
-  const showInstall = !isInstalled && !isStandalone;
+  const showInstall = !isInstalled && !isStandalone && !isInstalledAppRuntime();
 
   return (
     <div className="min-h-screen flex bg-[var(--color-bg)] relative">
@@ -116,6 +119,26 @@ export default function LoginPage() {
               <InstallAppButton variant="login-banner" />
             </div>
           )}
+
+          {/* Universal Check for Updates Entry Point (Available before login for all platforms and roles) */}
+          <div className="mt-6 pt-5 border-t border-gray-100 dark:border-gray-800 flex flex-col items-center justify-center gap-1.5 text-center">
+            <button
+              type="button"
+              onClick={() => triggerAppUpdateCheck()}
+              className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold text-gray-500 hover:text-red-600 dark:text-gray-400 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors cursor-pointer group"
+              id="login-check-updates-button"
+              title="Check for Daily Fresh ERP updates"
+            >
+              <RefreshCw className="w-3.5 h-3.5 group-hover:rotate-180 transition-transform duration-300" />
+              <span>Check for Updates</span>
+              <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
+                v{OFFICIAL_DISTRIBUTION.version}
+              </span>
+            </button>
+            <p className="text-[11px] text-gray-400 dark:text-gray-500">
+              Instant updates across Web, Android, Windows &amp; iOS
+            </p>
+          </div>
 
         </div>
       </div>

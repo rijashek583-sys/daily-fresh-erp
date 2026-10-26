@@ -8,6 +8,8 @@ import { useStockStore } from '../../stores/stockStore';
 import { useUIStore } from '../../stores/uiStore';
 import { useAuthStore } from '../../stores/authStore';
 import { AlertTriangle, X } from 'lucide-react';
+import StaffBottomNav from './StaffBottomNav';
+import { cn } from '../../lib/utils';
 
 export default function AppShell() {
   const { listenerError, clearListenerError } = useDataStore();
@@ -16,11 +18,15 @@ export default function AppShell() {
   const { user } = useAuthStore();
 
   useEffect(() => {
-    if (user && (user.role === 'admin' || user.role === 'staff')) {
-      const unsub = useStockStore.getState().initialize();
-      return () => unsub();
+    if (user && (user.role === 'admin' || user.role === 'staff' || user.role === 'delivery_staff')) {
+      const unsubStock = useStockStore.getState().initialize();
+      const unsubData = useDataStore.getState().initialize();
+      return () => {
+        unsubStock();
+        unsubData();
+      };
     }
-  }, [user?.role]);
+  }, [user?.uid, user?.role]);
 
   // Close drawer on Escape key
   useEffect(() => {
@@ -73,10 +79,18 @@ export default function AppShell() {
           </div>
         )}
 
-        <main className="flex-1 p-4 sm:p-6 lg:p-10 overflow-auto">
+        <main
+          className={cn(
+            'flex-1 min-w-0 px-4 pt-4 sm:p-6 lg:p-10 overflow-y-auto overflow-x-hidden',
+            'pb-[calc(5rem+env(safe-area-inset-bottom,0px))] md:pb-10'
+          )}
+        >
           <Outlet />
         </main>
       </div>
+
+      {/* Mobile Bottom Navigation for Staff and Admin */}
+      <StaffBottomNav />
     </div>
   );
 }

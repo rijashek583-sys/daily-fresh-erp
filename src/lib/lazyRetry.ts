@@ -43,16 +43,16 @@ export function isDynamicImportError(error: unknown): boolean {
 export function hasUnsavedInput(): boolean {
   if (typeof document === 'undefined') return false;
 
-  // 1. Check active focused input
+  // 1. Check active focused input, textarea, or select
   const active = document.activeElement;
-  if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
-    const input = active as HTMLInputElement | HTMLTextAreaElement;
+  if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT')) {
+    const input = active as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
     if (input.value && input.value.trim().length > 0) {
       return true;
     }
   }
 
-  // 2. Check all text inputs / textareas across the DOM for non-empty dirty values
+  // 2. Check all text/number/date inputs and textareas across the DOM for dirty values
   const inputs = document.querySelectorAll(
     'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]), textarea'
   );
@@ -60,6 +60,23 @@ export function hasUnsavedInput(): boolean {
     const el = inputs[i] as HTMLInputElement | HTMLTextAreaElement;
     if (el.value && el.defaultValue !== undefined && el.value !== el.defaultValue) {
       return true;
+    }
+  }
+
+  // 3. Check open modals (e.g. RecordPaymentModal, DirectSaleModal, OpeningBalanceModal)
+  const openModals = document.querySelectorAll('.fixed.inset-0, [role="dialog"], [aria-modal="true"]');
+  for (let m = 0; m < openModals.length; m++) {
+    const modal = openModals[m];
+    // Exclude update banner or update dialogs themselves
+    if (modal.id?.includes('update') || modal.getAttribute('aria-label')?.toLowerCase().includes('update')) {
+      continue;
+    }
+    const modalInputs = modal.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea');
+    for (let i = 0; i < modalInputs.length; i++) {
+      const el = modalInputs[i] as HTMLInputElement | HTMLTextAreaElement;
+      if (el.value && el.value.trim().length > 0) {
+        return true;
+      }
     }
   }
 

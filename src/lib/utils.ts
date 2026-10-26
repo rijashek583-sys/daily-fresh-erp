@@ -63,14 +63,45 @@ export function slugify(text: string): string {
     .replace(/[^\w-]+/g, '');
 }
 
+/**
+ * Canonical set of Primary Foods product names (exact, lowercase).
+ * Business rule (confirmed 2026-10-23):
+ *   PRIMARY FOODS  — Kuboos, Roomali, Wheat Kuboos ONLY.
+ *   BAKERY FOODS   — every other product, including Soft Kuboos and Burger Bun.
+ *
+ * This set is the single source of truth for the name-match fallback.
+ * The Firestore product.division field takes precedence when present.
+ */
+const PRIMARY_PRODUCT_NAMES = new Set<string>(['kuboos', 'roomali', 'wheat kuboos']);
+
 export function getProductDivision(product: { name: string, division?: string } | undefined | null): 'primary' | 'bakery' {
   if (!product) return 'bakery';
+  // Trust the canonical Firestore division field when explicitly set.
   if (product.division === 'primary' || product.division === 'bakery') {
     return product.division;
   }
-  const name = product.name.trim().toLowerCase();
-  if (name === 'kuboos' || name === 'roomali' || name === 'soft kuboos') {
-    return 'primary';
-  }
-  return 'bakery';
+  // Fallback for items that pre-date the division field:
+  // exact match against the confirmed primary-foods list — no fuzzy matching.
+  return PRIMARY_PRODUCT_NAMES.has(product.name.trim().toLowerCase()) ? 'primary' : 'bakery';
 }
+
+/**
+ * Returns the current date in YYYY-MM-DD format based on local India/Kerala timezone (Asia/Kolkata).
+ * Eliminates UTC conversion shifting (+/- 1 day error).
+ */
+export function getTodayLocalDateString(date: Date = new Date()): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(date);
+  } catch {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+}
+

@@ -1,13 +1,14 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Package, ShoppingCart,
-  BarChart3, Settings, X, BookOpen, ChevronRight, Receipt, Trash2, LogOut, CreditCard, UserCheck
+  BarChart3, Settings, X, BookOpen, ChevronRight, Receipt, Trash2, LogOut, CreditCard, UserCheck, RefreshCw, ReceiptText
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useUIStore } from '../../stores/uiStore';
 import { useAuthStore } from '../../stores/authStore';
 import InstallAppButton from '../pwa/InstallAppButton';
 import { Avatar } from '../ui';
+import { triggerAppUpdateCheck } from '../../services/appUpdateService';
 
 interface NavItem {
   label: string;
@@ -23,6 +24,7 @@ const adminNavItems: NavItem[] = [
   { label: 'Staff', href: '/staff', icon: UserCheck },
   { label: 'Products', href: '/products', icon: Package },
   { label: 'Daily Bill', href: '/billing', icon: Receipt },
+  { label: 'Expenses', href: '/expenses', icon: ReceiptText },
   { label: 'Client Ledger', href: '/ledger', icon: BookOpen },
   { label: 'Reports', href: '/reports', icon: BarChart3 },
   { label: 'Settings', href: '/settings', icon: Settings },
@@ -30,9 +32,10 @@ const adminNavItems: NavItem[] = [
 ];
 
 const staffNavItems: NavItem[] = [
+  { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { label: 'Clients', href: '/clients', icon: Users },
-  { label: 'Orders', href: '/orders', icon: ShoppingCart },
-  { label: 'Payments / Collection', href: '/payments', icon: CreditCard },
+  { label: 'Payment & Collection', href: '/payments', icon: CreditCard },
+  { label: 'My Expenses', href: '/expenses', icon: ReceiptText },
 ];
 
 export default function MobileSidebar() {
@@ -124,7 +127,10 @@ export default function MobileSidebar() {
         </nav>
 
         {/* User footer */}
-        <div className="shrink-0 p-4 border-t border-gray-200/50 dark:border-white/[0.04]">
+        <div
+          className="shrink-0 p-4 border-t border-gray-200/50 dark:border-white/[0.04]"
+          style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 1rem)' }}
+        >
           <div onClick={() => setSidebarOpen(false)}>
             <InstallAppButton variant="sidebar" className="mb-3" />
           </div>
@@ -136,8 +142,20 @@ export default function MobileSidebar() {
             </div>
           </div>
           <button
+            type="button"
+            onClick={() => {
+              setSidebarOpen(false);
+              triggerAppUpdateCheck();
+            }}
+            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-semibold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800/60 transition-all duration-200 mb-1 cursor-pointer"
+            id="mobile-sidebar-check-updates-button"
+          >
+            <RefreshCw className="w-4 h-4 text-gray-400" />
+            Check for Updates
+          </button>
+          <button
             onClick={() => useAuthStore.getState().logout()}
-            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-200"
+            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-200 cursor-pointer"
           >
             <LogOut className="w-4 h-4" />
             Logout

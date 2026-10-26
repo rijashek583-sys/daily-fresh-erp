@@ -51,8 +51,8 @@ function useCategoryOptions() {
 export function DivisionDropdownMobile({ activeTab, onChange, className }: DivisionTabsProps) {
   const options = useCategoryOptions();
   return (
-    <div className={cn("w-full flex flex-col gap-1.5", className)}>
-      <label className="text-[11px] font-bold text-gray-400 uppercase tracking-widest pl-1">
+    <div className={cn("w-full flex flex-col gap-1", className)}>
+      <label className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest pl-1 select-none">
         Category
       </label>
       <div className="relative w-full">
@@ -60,16 +60,16 @@ export function DivisionDropdownMobile({ activeTab, onChange, className }: Divis
           value={activeTab}
           onChange={e => onChange(e.target.value as FilterDivision)}
           className="
-            w-full appearance-none pl-4 pr-10 py-3
-            bg-white dark:bg-gray-900
-            border border-gray-200 dark:border-gray-700
-            rounded-2xl
-            text-sm font-bold text-[var(--color-text-main)]
+            w-full appearance-none pl-3.5 pr-9 h-10
+            bg-gray-50 dark:bg-gray-900/90
+            border border-gray-200/90 dark:border-gray-700/80
+            rounded-xl
+            text-xs sm:text-sm font-bold text-[var(--color-text-main)]
             outline-none
             focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20
             transition-all duration-200
             cursor-pointer
-            shadow-sm
+            shadow-xs
           "
         >
           {options.map((tab) => (
@@ -78,7 +78,7 @@ export function DivisionDropdownMobile({ activeTab, onChange, className }: Divis
             </option>
           ))}
         </select>
-        <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
       </div>
     </div>
   );

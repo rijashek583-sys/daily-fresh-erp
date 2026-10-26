@@ -4,6 +4,9 @@ import { usePwaInstall } from '../../hooks/usePwaInstall';
 import InstallInstructionsModal from './InstallInstructionsModal';
 import { cn } from '../../lib/utils';
 
+import { toast } from 'sonner';
+import { isInstalledAppRuntime } from '../../config/distribution';
+
 interface InstallAppButtonProps {
   variant?: 'header' | 'login-corner' | 'login-banner' | 'sidebar';
   className?: string;
@@ -17,14 +20,15 @@ export default function InstallAppButton({
     isStandalone,
     isInstalled,
     hasNativePrompt,
+    isInAppBrowser,
     platform,
     showInstructions,
     setShowInstructions,
     triggerInstall,
   } = usePwaInstall();
 
-  // If already running inside installed standalone PWA or confirmed installed on this device, do not show install action
-  if (isStandalone || isInstalled) {
+  // If already running inside installed standalone PWA, Windows desktop app, or Android app, NEVER show install action
+  if (isStandalone || isInstalled || isInstalledAppRuntime()) {
     return null;
   }
 
@@ -38,13 +42,26 @@ export default function InstallAppButton({
 
   const platformBadge =
     platform === 'ios' ? 'iPhone & iPad' :
-    platform === 'android' ? 'Android' :
+    platform === 'android' ? 'Android APK' :
     platform === 'windows' ? 'Windows PC' :
     platform === 'macos' ? 'macOS' :
     'Mobile & PC';
 
   const handleClick = async () => {
-    await triggerInstall();
+    const outcome = await triggerInstall();
+    if (outcome === 'download-started') {
+      if (platform === 'windows') {
+        toast.info('Downloading DailyFresh-Setup.exe (108.5 MB)', {
+          description: 'Run the setup installer once downloaded to complete installation. (Note: Downloading is not installing).',
+          duration: 7000,
+        });
+      } else if (platform === 'android') {
+        toast.info('Downloading DailyFresh.apk (16.1 MB)', {
+          description: 'Tap Open on the downloaded file in your notification bar to complete installation. (Note: Downloading is not installing).',
+          duration: 7000,
+        });
+      }
+    }
   };
 
   return (
@@ -147,6 +164,7 @@ export default function InstallAppButton({
         onClose={() => setShowInstructions(false)}
         detectedPlatform={platform}
         hasNativePrompt={hasNativePrompt}
+        isInAppBrowser={isInAppBrowser}
         onTriggerNativePrompt={triggerInstall}
       />
     </>

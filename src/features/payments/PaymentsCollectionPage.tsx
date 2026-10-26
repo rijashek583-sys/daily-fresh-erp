@@ -1,18 +1,25 @@
 import { useState, useMemo } from 'react';
 import {
   CreditCard, Search, Calendar, MapPin, CheckCircle2, Clock,
-  ArrowRight, Filter, Receipt, RefreshCw, Banknote, Smartphone, Building, ShoppingBag
+  ArrowRight, Filter, Receipt, RefreshCw, Banknote, Smartphone, Building, ShoppingBag,
+  Printer, Users, Download
 } from 'lucide-react';
 import { format, isToday } from 'date-fns';
+import { toast } from 'sonner';
 import { useDataStore } from '../../stores/dataStore';
 import { useDivisionStore } from '../../stores/divisionStore';
 import { useAuthStore } from '../../stores/authStore';
 import { Button, Card, Badge } from '../../components/ui';
 import { formatCurrency, cn, getProductDivision } from '../../lib/utils';
-import { type Order, type Payment, type PaymentMethod, type Division } from '../../types';
+import { type Order, type Payment, type PaymentMethod, type Division, type Client } from '../../types';
+import { downloadStaffCollectionsCsv } from '../../lib/csvExport';
 import RecordPaymentModal from '../../components/payments/RecordPaymentModal';
 import OrderPaymentHistoryModal from '../../components/payments/OrderPaymentHistoryModal';
+import CorrectPaymentModal from '../../components/payments/CorrectPaymentModal';
 import DirectSaleModal from '../../components/orders/DirectSaleModal';
+import StaffPaymentsWorkspace from './StaffPaymentsWorkspace';
+import { printOrderInvoice } from '../../lib/invoicePrint';
+import { getClientOutstanding, getClientMetrics } from '../../lib/billing';
 
 const methodIcon: Record<PaymentMethod, React.ElementType> = {
   upi: Smartphone,
@@ -29,21 +36,27 @@ const methodLabel: Record<PaymentMethod, string> = {
 };
 
 export default function PaymentsCollectionPage() {
-  const { clients, orders, payments, products } = useDataStore();
+  const { clients, orders, payments, products, ledger } = useDataStore();
   const { activeDivision } = useDivisionStore();
   const { user } = useAuthStore();
+  if (user?.role !== 'admin') {
+    return <StaffPaymentsWorkspace />;
+  }
 
   const [activeTab, setActiveTab] = useState<'pending' | 'history'>('pending');
+  const [pendingSubTab, setPendingSubTab] = useState<'bills' | 'clients'>('clients');
   const [search, setSearch] = useState('');
   const [filterRegion, setFilterRegion] = useState('');
   const [dateFilter, setDateFilter] = useState('');
 
   // Modals state
   const [selectedOrderForPayment, setSelectedOrderForPayment] = useState<Order | null>(null);
+  const [selectedClientForPayment, setSelectedClientForPayment] = useState<Client | null>(null);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [historyModalOrder, setHistoryModalOrder] = useState<Order | null>(null);
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const [directSaleModalOpen, setDirectSaleModalOpen] = useState(false);
+  const [correctingPayment, setCorrectingPayment] = useState<Payment | null>(null);
 
   // Filter payments by active division
   const validPayments = useMemo(() => {
@@ -56,18 +69,28 @@ export default function PaymentsCollectionPage() {
     });
   }, [payments, activeDivision]);
 
-  // Payment totals mapped by invoiceId
+  // Payment totals mapped by invoiceId respecting cross-division counterparts
   const invoicePaymentsMap = useMemo(() => {
     const map = new Map<string, number>();
-    for (const p of validPayments) {
-      if (p.invoiceId) {
+    for (const p of payments) {
+      if (p.deletedAt) continue;
+
+      if (p.invoiceId && (activeDivision === 'all' || p.division === activeDivision)) {
         const current = map.get(p.invoiceId) || 0;
         const applied = p.appliedAmount !== undefined ? p.appliedAmount : (p.amount || 0);
         map.set(p.invoiceId, current + applied);
       }
+
+      if (p.otherInvoiceId && (p.appliedToOtherBill || 0) > 0) {
+        const otherDiv = p.division === 'bakery' ? 'primary' : 'bakery';
+        if (activeDivision === 'all' || activeDivision === otherDiv) {
+          const current = map.get(p.otherInvoiceId) || 0;
+          map.set(p.otherInvoiceId, current + (p.appliedToOtherBill || 0));
+        }
+      }
     }
     return map;
-  }, [validPayments]);
+  }, [payments, activeDivision]);
 
   // Calculate order items and totals respecting division
   const processedOrders = useMemo(() => {
@@ -85,13 +108,25 @@ export default function PaymentsCollectionPage() {
         : itemsToProcess.reduce((sum, i) => sum + (i.total || (i.qty * i.unitPrice) || 0), 0);
 
       const creditApplied = activeDivision === 'all'
-        ? (o.creditApplied || 0)
+        ? (o.creditApplied || ((o.primaryCreditApplied || 0) + (o.bakeryCreditApplied || 0)))
         : (activeDivision === 'primary'
             ? (o.primaryCreditApplied || (o.division === 'primary' ? (o.creditApplied || 0) : 0))
             : (o.bakeryCreditApplied || (o.division === 'bakery' ? (o.creditApplied || 0) : 0)));
 
-      const paid = invoicePaymentsMap.get(o.id) || 0;
-      const pending = Math.max(0, total - creditApplied - paid);
+      const isPurelyThisDivision = activeDivision === 'all' || o.division === activeDivision || (o.items || []).every(item => {
+        const prod = products.find(p => p.id === item.productId);
+        return getProductDivision(prod || { name: item.productName }) === activeDivision;
+      });
+
+      const invoicePaid = invoicePaymentsMap.get(o.id) || 0;
+      const effectivePaidAmount = (activeDivision === 'all' || isPurelyThisDivision)
+        ? Math.max(invoicePaid, o.paidAmount || 0)
+        : (o.paymentStatus === 'paid' ? total : invoicePaid);
+
+      const netDue = Math.max(0, total - creditApplied);
+      const isPaid = (o.paymentStatus === 'paid' && (activeDivision === 'all' || isPurelyThisDivision || netDue <= (effectivePaidAmount || 0))) || (netDue - effectivePaidAmount) <= 0.01;
+      const pending = isPaid ? 0 : Math.max(0, netDue - effectivePaidAmount);
+      const paid = isPaid ? netDue : effectivePaidAmount;
 
       const isDirect = o.orderType === 'direct' || o.clientId === 'direct';
       const client = isDirect ? null : clients.find(c => c.id === o.clientId);
@@ -103,6 +138,7 @@ export default function PaymentsCollectionPage() {
         total,
         paid,
         pending,
+        isPaid,
         region,
       };
     }).filter(o => {
@@ -114,7 +150,7 @@ export default function PaymentsCollectionPage() {
   // Orders with Pending Balance > 0
   const pendingOrders = useMemo(() => {
     return processedOrders
-      .filter(o => o.pending > 0.01)
+      .filter(o => !o.isPaid && o.pending > 0.01)
       .filter(o => (filterRegion ? o.region === filterRegion : true))
       .filter(o => {
         if (!search) return true;
@@ -166,6 +202,38 @@ export default function PaymentsCollectionPage() {
     return processedOrders.reduce((sum, o) => sum + o.pending, 0);
   }, [processedOrders]);
 
+  // Clients with pending balance across divisions (opening balance + ledger debits - payments)
+  const pendingClients = useMemo(() => {
+    const activeClientsList = clients.filter(c => !c.deletedAt && c.status === 'active');
+    return activeClientsList.map(c => {
+      const metrics = getClientMetrics(c.id, activeDivision);
+      const receivable = Math.max(0, metrics.outstanding);
+      return {
+        client: c,
+        metrics,
+        outstanding: receivable,
+        region: c.region || c.city || '—',
+      };
+    }).filter(c => c.outstanding > 0.01)
+      .filter(c => (filterRegion ? c.region === filterRegion : true))
+      .filter(c => {
+        if (!search) return true;
+        const q = search.toLowerCase();
+        return (
+          c.client.name.toLowerCase().includes(q) ||
+          (c.client.phone || '').toLowerCase().includes(q) ||
+          c.region.toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => b.outstanding - a.outstanding);
+  }, [clients, ledger, orders, payments, activeDivision, filterRegion, search]);
+
+  const totalOutstandingReceivables = useMemo(() => {
+    return clients
+      .filter(c => !c.deletedAt && c.status === 'active')
+      .reduce((sum, c) => sum + Math.max(0, getClientOutstanding(c.id, activeDivision)), 0);
+  }, [clients, ledger, orders, payments, activeDivision]);
+
   const uniqueRegions = useMemo(() => {
     const set = new Set<string>();
     clients.forEach(c => {
@@ -176,13 +244,44 @@ export default function PaymentsCollectionPage() {
 
   // Open modal helpers
   const handleOpenPayment = (order: Order) => {
+    setSelectedClientForPayment(null);
     setSelectedOrderForPayment(order);
+    setPaymentModalOpen(true);
+  };
+
+  const handleOpenClientPayment = (client: Client) => {
+    setSelectedOrderForPayment(null);
+    setSelectedClientForPayment(client);
     setPaymentModalOpen(true);
   };
 
   const handleOpenHistory = (order: Order) => {
     setHistoryModalOrder(order);
     setHistoryModalOpen(true);
+  };
+
+  const handlePrintOrder = (order: Order) => {
+    const client = clients.find(c => c.id === order.clientId) || null;
+    printOrderInvoice({ order, client, payments, products, ledger });
+  };
+
+  const handleExportHistoryCsv = () => {
+    if (filteredHistory.length === 0) {
+      toast.info('No payment records to export for the current filters.');
+      return;
+    }
+
+    const dateLabel = dateFilter || 'All_Time';
+    const result = downloadStaffCollectionsCsv(filteredHistory, {
+      dateLabel,
+      divisionFilter: activeDivision,
+      staffFilterLabel: 'All Staff & Admin Records',
+      filePrefix: 'Staff_Collections_History',
+    });
+
+    toast.success(
+      `Exported ${result.recordCount} payment records (${formatCurrency(result.totalCollected)}).`
+    );
   };
 
   return (
@@ -200,6 +299,32 @@ export default function PaymentsCollectionPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
+          {activeTab === 'history' && filteredHistory.length > 0 && (
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<Download className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />}
+              onClick={handleExportHistoryCsv}
+              title="Download Payment History as CSV"
+            >
+              Download CSV
+            </Button>
+          )}
+
+          <Button
+            size="sm"
+            variant="primary"
+            icon={<CreditCard className="w-4 h-4" />}
+            onClick={() => {
+              setSelectedOrderForPayment(null);
+              setSelectedClientForPayment(null);
+              setPaymentModalOpen(true);
+            }}
+            className="shadow-sm shadow-red-500/20"
+          >
+            Record Payment
+          </Button>
+
           <Button
             size="sm"
             variant="secondary"
@@ -229,7 +354,7 @@ export default function PaymentsCollectionPage() {
                 ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400'
                 : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
             )}>
-              {pendingOrders.length}
+              {pendingOrders.length > 0 ? pendingOrders.length : pendingClients.length}
             </span>
           </button>
 
@@ -283,7 +408,10 @@ export default function PaymentsCollectionPage() {
               Total Outstanding
             </p>
             <p className="text-2xl font-bold text-amber-600 dark:text-amber-400 tabular-nums">
-              {formatCurrency(totalPendingAmount)}
+              {formatCurrency(totalOutstandingReceivables)}
+            </p>
+            <p className="text-[10px] text-gray-400 font-medium">
+              {pendingClients.length} clients with balance
             </p>
           </div>
         </Card>
@@ -298,6 +426,9 @@ export default function PaymentsCollectionPage() {
             </p>
             <p className="text-2xl font-bold text-[var(--color-text-main)] tabular-nums">
               {pendingOrders.length}
+            </p>
+            <p className="text-[10px] text-gray-400 font-medium">
+              {formatCurrency(totalPendingAmount)} due on bills
             </p>
           </div>
         </Card>
@@ -347,44 +478,269 @@ export default function PaymentsCollectionPage() {
 
       {/* ── Content View ── */}
       {activeTab === 'pending' ? (
-        pendingOrders.length === 0 ? (
+        pendingOrders.length === 0 && pendingClients.length === 0 ? (
           <div className="text-center py-20 bg-[var(--color-card)] rounded-3xl border border-dashed border-gray-200 dark:border-gray-800">
             <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto mb-3" />
             <h3 className="text-base font-bold text-[var(--color-text-main)]">
               No Pending Collections
             </h3>
             <p className="text-xs font-medium text-gray-500 mt-1">
-              All matching customer orders have been fully paid.
+              All matching customer orders and client accounts are fully settled.
             </p>
           </div>
         ) : (
-          <div className="space-y-3">
-            {/* Desktop Table */}
-            <div className="hidden md:block">
-              <Card padding={false} className="overflow-hidden">
-                <table className="w-full text-sm border-collapse">
-                  <thead>
-                    <tr className="bg-gray-50/80 dark:bg-gray-900/60 border-b border-gray-100 dark:border-gray-800 text-[11px] font-bold text-gray-500 uppercase tracking-wider text-left">
-                      <th className="px-5 py-3.5">Shop / Client</th>
-                      <th className="px-4 py-3.5">Region</th>
-                      <th className="px-4 py-3.5">Delivery Date</th>
-                      <th className="px-4 py-3.5">Items</th>
-                      <th className="px-4 py-3.5 text-right">Order Total</th>
-                      <th className="px-4 py-3.5 text-right">Paid</th>
-                      <th className="px-4 py-3.5 text-right">Pending Amount</th>
-                      <th className="px-5 py-3.5 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50 dark:divide-gray-800/40">
-                    {pendingOrders.map(order => {
-                      const isDirect = order.orderType === 'direct' || order.clientId === 'direct';
-                      return (
-                      <tr key={order.id} className="hover:bg-gray-50/60 dark:hover:bg-gray-800/20 transition-colors">
-                        <td className="px-5 py-3.5">
+          <div className="space-y-4">
+            {/* Sub-tab switcher when both order bills and client balances exist */}
+            {pendingOrders.length > 0 && pendingClients.length > 0 && (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPendingSubTab('bills')}
+                  className={cn(
+                    'px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5',
+                    pendingSubTab === 'bills'
+                      ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 shadow-xs'
+                      : 'bg-gray-100 dark:bg-gray-800 text-gray-500 hover:text-gray-900 dark:hover:text-gray-200'
+                  )}
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>Pending Orders ({pendingOrders.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPendingSubTab('clients')}
+                  className={cn(
+                    'px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5',
+                    pendingSubTab === 'clients'
+                      ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 shadow-xs'
+                      : 'bg-gray-100 dark:bg-gray-800 text-gray-500 hover:text-gray-900 dark:hover:text-gray-200'
+                  )}
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Client Balances ({pendingClients.length})</span>
+                </button>
+              </div>
+            )}
+
+            {/* View: Client Balances */}
+            {(pendingSubTab === 'clients' || pendingOrders.length === 0) && (
+              <div className="space-y-3">
+                {/* Desktop Clients Table */}
+                <div className="hidden md:block">
+                  <Card padding={false} className="overflow-hidden">
+                    <div className="p-4 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between">
+                      <div>
+                        <h3 className="text-sm font-bold text-[var(--color-text-main)]">
+                          Clients with Outstanding Balances ({pendingClients.length})
+                        </h3>
+                        <p className="text-xs text-gray-400">
+                          Balances from opening balances, ledger debits, and unpaid orders.
+                        </p>
+                      </div>
+                    </div>
+                    <table className="w-full text-sm border-collapse">
+                      <thead>
+                        <tr className="bg-gray-50/80 dark:bg-gray-900/60 border-b border-gray-100 dark:border-gray-800 text-[11px] font-bold text-gray-500 uppercase tracking-wider text-left">
+                          <th className="px-5 py-3.5">Shop / Client</th>
+                          <th className="px-4 py-3.5">Region</th>
+                          <th className="px-4 py-3.5 text-right">Total Invoiced</th>
+                          <th className="px-4 py-3.5 text-right">Total Paid</th>
+                          <th className="px-4 py-3.5 text-right">Total Outstanding</th>
+                          <th className="px-5 py-3.5 text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-50 dark:divide-gray-800/40">
+                        {pendingClients.map(({ client, metrics, outstanding, region }) => (
+                          <tr key={client.id} className="hover:bg-gray-50/60 dark:hover:bg-gray-800/20 transition-colors">
+                            <td className="px-5 py-3.5">
+                              <div className="font-bold text-xs text-[var(--color-text-main)]">{client.name}</div>
+                              <div className="text-[10px] text-gray-400 font-mono">
+                                {client.phone ? client.phone : `#${client.id.slice(0, 10)}`}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <Badge variant="gray">{region}</Badge>
+                            </td>
+                            <td className="px-4 py-3.5 text-right font-medium text-xs tabular-nums text-[var(--color-text-main)]">
+                              {formatCurrency(metrics.totalInvoiced)}
+                            </td>
+                            <td className="px-4 py-3.5 text-right font-medium text-xs tabular-nums text-emerald-600 dark:text-emerald-400">
+                              {formatCurrency(metrics.totalPaid)}
+                            </td>
+                            <td className="px-4 py-3.5 text-right font-bold text-sm tabular-nums text-amber-600 dark:text-amber-400">
+                              {formatCurrency(outstanding)}
+                            </td>
+                            <td className="px-5 py-3.5 text-right whitespace-nowrap">
+                              <Button
+                                size="sm"
+                                icon={<CreditCard className="w-3.5 h-3.5" />}
+                                onClick={() => handleOpenClientPayment(client)}
+                                className="shadow-sm shadow-red-500/20"
+                              >
+                                Record Payment
+                              </Button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </Card>
+                </div>
+
+                {/* Mobile Clients Cards */}
+                <div className="md:hidden space-y-3">
+                  {pendingClients.map(({ client, metrics, outstanding, region }) => (
+                    <Card key={client.id} className="p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <h4 className="font-bold text-sm text-[var(--color-text-main)]">{client.name}</h4>
+                          <p className="text-[11px] text-gray-400 font-medium mt-0.5">{region}</p>
+                        </div>
+                        <Badge variant="warning">Outstanding</Badge>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 py-2 px-3 rounded-xl bg-gray-50 dark:bg-gray-800/40 text-center text-xs">
+                        <div>
+                          <span className="text-[10px] text-gray-400 uppercase">Invoiced</span>
+                          <p className="font-semibold text-[var(--color-text-main)]">{formatCurrency(metrics.totalInvoiced)}</p>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-gray-400 uppercase">Paid</span>
+                          <p className="font-semibold text-emerald-600">{formatCurrency(metrics.totalPaid)}</p>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-gray-400 uppercase">Due</span>
+                          <p className="font-bold text-amber-600">{formatCurrency(outstanding)}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-end pt-1">
+                        <Button
+                          size="sm"
+                          icon={<CreditCard className="w-3.5 h-3.5" />}
+                          onClick={() => handleOpenClientPayment(client)}
+                          className="shadow-sm w-full"
+                        >
+                          Record Payment
+                        </Button>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* View: Pending Orders Bills */}
+            {pendingSubTab === 'bills' && pendingOrders.length > 0 && (
+              <div className="space-y-3">
+                {/* Desktop Table */}
+                <div className="hidden md:block">
+                  <Card padding={false} className="overflow-hidden">
+                    <table className="w-full text-sm border-collapse">
+                      <thead>
+                        <tr className="bg-gray-50/80 dark:bg-gray-900/60 border-b border-gray-100 dark:border-gray-800 text-[11px] font-bold text-gray-500 uppercase tracking-wider text-left">
+                          <th className="px-5 py-3.5">Shop / Client</th>
+                          <th className="px-4 py-3.5">Region</th>
+                          <th className="px-4 py-3.5">Delivery Date</th>
+                          <th className="px-4 py-3.5">Items</th>
+                          <th className="px-4 py-3.5 text-right">Order Total</th>
+                          <th className="px-4 py-3.5 text-right">Paid</th>
+                          <th className="px-4 py-3.5 text-right">Pending Amount</th>
+                          <th className="px-5 py-3.5 text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-50 dark:divide-gray-800/40">
+                        {pendingOrders.map(order => {
+                          const isDirect = order.orderType === 'direct' || order.clientId === 'direct';
+                          return (
+                          <tr key={order.id} className="hover:bg-gray-50/60 dark:hover:bg-gray-800/20 transition-colors">
+                            <td className="px-5 py-3.5">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="font-bold text-xs text-[var(--color-text-main)]">
+                                  {isDirect ? 'Direct Sale' : order.clientName}
+                                </span>
+                                <span
+                                  className={cn(
+                                    'text-[10px] font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap',
+                                    isDirect
+                                      ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300'
+                                      : 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400'
+                                  )}
+                                >
+                                  {isDirect ? 'Direct Sale' : 'Client Order'}
+                                </span>
+                              </div>
+                              <span className="text-[10px] text-gray-400 font-mono">
+                                #{order.id.slice(0, 10)}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <Badge variant={isDirect ? 'warning' : 'gray'}>
+                                {isDirect ? 'Direct Sale / —' : (order.region || '—')}
+                              </Badge>
+                            </td>
+                            <td className="px-4 py-3.5 text-xs font-medium text-[var(--color-text-muted)] whitespace-nowrap">
+                              {format(new Date(order.deliveryDate), 'MMM d, yyyy')}
+                            </td>
+                            <td className="px-4 py-3.5 text-xs text-[var(--color-text-muted)]">
+                              {order.items.map(i => `${i.productName} (${i.qty})`).join(', ')}
+                            </td>
+                            <td className="px-4 py-3.5 text-right font-semibold text-xs tabular-nums text-[var(--color-text-main)]">
+                              {formatCurrency(order.total)}
+                            </td>
+                            <td className="px-4 py-3.5 text-right font-medium text-xs tabular-nums text-emerald-600 dark:text-emerald-400">
+                              {formatCurrency(order.paid)}
+                            </td>
+                            <td className="px-4 py-3.5 text-right font-bold text-sm tabular-nums text-amber-600 dark:text-amber-400">
+                              {formatCurrency(order.pending)}
+                            </td>
+                            <td className="px-5 py-3.5 text-right whitespace-nowrap">
+                              <div className="flex items-center justify-end gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  icon={<Printer className="w-3.5 h-3.5" />}
+                                  onClick={() => handlePrintOrder(order)}
+                                  className="text-xs h-8 px-2.5"
+                                >
+                                  Bill
+                                </Button>
+                                {order.paid > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenHistory(order)}
+                                    className="text-[11px] font-semibold text-gray-500 hover:text-gray-900 dark:hover:text-gray-100 hover:underline mr-1"
+                                  >
+                                    History
+                                  </button>
+                                )}
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleOpenPayment(order)}
+                                  className="shadow-sm shadow-red-500/20"
+                                >
+                                  Record Payment
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </Card>
+                </div>
+
+                {/* Mobile Cards */}
+                <div className="md:hidden space-y-3">
+                  {pendingOrders.map(order => {
+                    const isDirect = order.orderType === 'direct' || order.clientId === 'direct';
+                    return (
+                    <Card key={order.id} className="p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
                           <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="font-bold text-xs text-[var(--color-text-main)]">
+                            <h4 className="font-bold text-sm text-[var(--color-text-main)]">
                               {isDirect ? 'Direct Sale' : order.clientName}
-                            </span>
+                            </h4>
                             <span
                               className={cn(
                                 'text-[10px] font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap',
@@ -396,129 +752,67 @@ export default function PaymentsCollectionPage() {
                               {isDirect ? 'Direct Sale' : 'Client Order'}
                             </span>
                           </div>
-                          <span className="text-[10px] text-gray-400 font-mono">
-                            #{order.id.slice(0, 10)}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <Badge variant={isDirect ? 'warning' : 'gray'}>
-                            {isDirect ? 'Direct Sale / —' : (order.region || '—')}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-3.5 text-xs font-medium text-[var(--color-text-muted)] whitespace-nowrap">
-                          {format(new Date(order.deliveryDate), 'MMM d, yyyy')}
-                        </td>
-                        <td className="px-4 py-3.5 text-xs text-[var(--color-text-muted)]">
-                          {order.items.map(i => `${i.productName} (${i.qty})`).join(', ')}
-                        </td>
-                        <td className="px-4 py-3.5 text-right font-semibold text-xs tabular-nums text-[var(--color-text-main)]">
-                          {formatCurrency(order.total)}
-                        </td>
-                        <td className="px-4 py-3.5 text-right font-medium text-xs tabular-nums text-emerald-600 dark:text-emerald-400">
-                          {formatCurrency(order.paid)}
-                        </td>
-                        <td className="px-4 py-3.5 text-right font-bold text-sm tabular-nums text-amber-600 dark:text-amber-400">
-                          {formatCurrency(order.pending)}
-                        </td>
-                        <td className="px-5 py-3.5 text-right whitespace-nowrap">
-                          <div className="flex items-center justify-end gap-2">
-                            {order.paid > 0 && (
-                              <button
-                                type="button"
-                                onClick={() => handleOpenHistory(order)}
-                                className="text-[11px] font-semibold text-gray-500 hover:text-gray-900 dark:hover:text-gray-100 hover:underline mr-1"
-                              >
-                                History
-                              </button>
-                            )}
-                            <Button
-                              size="sm"
-                              onClick={() => handleOpenPayment(order)}
-                              className="shadow-sm shadow-red-500/20"
-                            >
-                              Record Payment
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </Card>
-            </div>
-
-            {/* Mobile Cards */}
-            <div className="md:hidden space-y-3">
-              {pendingOrders.map(order => {
-                const isDirect = order.orderType === 'direct' || order.clientId === 'direct';
-                return (
-                <Card key={order.id} className="p-4 space-y-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <h4 className="font-bold text-sm text-[var(--color-text-main)]">
-                          {isDirect ? 'Direct Sale' : order.clientName}
-                        </h4>
-                        <span
-                          className={cn(
-                            'text-[10px] font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap',
-                            isDirect
-                              ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300'
-                              : 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400'
-                          )}
-                        >
-                          {isDirect ? 'Direct Sale' : 'Client Order'}
-                        </span>
+                          <p className="text-[11px] text-gray-400 font-medium mt-0.5">
+                            {isDirect ? 'Direct Sale / — · ' : (order.region ? `${order.region} · ` : '')}
+                            {format(new Date(order.deliveryDate), 'MMM d, yyyy')}
+                          </p>
+                        </div>
+                        <Badge variant="warning">
+                          Pending
+                        </Badge>
                       </div>
-                      <p className="text-[11px] text-gray-400 font-medium mt-0.5">
-                        {isDirect ? 'Direct Sale / — · ' : (order.region ? `${order.region} · ` : '')}
-                        {format(new Date(order.deliveryDate), 'MMM d, yyyy')}
-                      </p>
-                    </div>
-                    <Badge variant="warning">
-                      Pending
-                    </Badge>
-                  </div>
 
-                  <div className="grid grid-cols-3 gap-2 py-2 px-3 rounded-xl bg-gray-50 dark:bg-gray-800/40 text-center text-xs">
-                    <div>
-                      <span className="text-[10px] text-gray-400 uppercase">Total</span>
-                      <p className="font-semibold text-[var(--color-text-main)]">{formatCurrency(order.total)}</p>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-gray-400 uppercase">Paid</span>
-                      <p className="font-semibold text-emerald-600">{formatCurrency(order.paid)}</p>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-gray-400 uppercase">Pending</span>
-                      <p className="font-bold text-amber-600">{formatCurrency(order.pending)}</p>
-                    </div>
-                  </div>
+                      <div className="grid grid-cols-3 gap-2 py-2 px-3 rounded-xl bg-gray-50 dark:bg-gray-800/40 text-center text-xs">
+                        <div>
+                          <span className="text-[10px] text-gray-400 uppercase">Total</span>
+                          <p className="font-semibold text-[var(--color-text-main)]">{formatCurrency(order.total)}</p>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-gray-400 uppercase">Paid</span>
+                          <p className="font-semibold text-emerald-600">{formatCurrency(order.paid)}</p>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-gray-400 uppercase">Pending</span>
+                          <p className="font-bold text-amber-600">{formatCurrency(order.pending)}</p>
+                        </div>
+                      </div>
 
-                  <div className="flex items-center justify-between gap-3 pt-1">
-                    {order.paid > 0 ? (
-                      <button
-                        type="button"
-                        onClick={() => handleOpenHistory(order)}
-                        className="text-xs font-semibold text-gray-500 hover:text-gray-900"
-                      >
-                        View History
-                      </button>
-                    ) : <span />}
+                      <div className="flex items-center justify-between gap-3 pt-1">
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            icon={<Printer className="w-3.5 h-3.5" />}
+                            onClick={() => handlePrintOrder(order)}
+                            className="text-xs h-8 px-2.5"
+                          >
+                            Bill
+                          </Button>
+                          {order.paid > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenHistory(order)}
+                              className="text-xs font-semibold text-gray-500 hover:text-gray-900"
+                            >
+                              History
+                            </button>
+                          )}
+                        </div>
 
-                    <Button
-                      size="sm"
-                      onClick={() => handleOpenPayment(order)}
-                      className="w-full sm:w-auto shadow-sm"
-                    >
-                      Record Payment
-                    </Button>
-                  </div>
-                </Card>
-                );
-              })}
-            </div>
+                        <Button
+                          size="sm"
+                          onClick={() => handleOpenPayment(order)}
+                          className="shadow-sm"
+                        >
+                          Record Payment
+                        </Button>
+                      </div>
+                    </Card>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )
       ) : (
@@ -546,6 +840,7 @@ export default function PaymentsCollectionPage() {
                     <th className="px-4 py-3.5">Reference / Notes</th>
                     <th className="px-4 py-3.5">Recorded By</th>
                     <th className="px-5 py-3.5 text-right">Amount Paid</th>
+                    <th className="px-5 py-3.5 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50 dark:divide-gray-800/40">
@@ -588,7 +883,22 @@ export default function PaymentsCollectionPage() {
                           {staffName}
                         </td>
                         <td className="px-5 py-3.5 text-right font-bold text-sm tabular-nums text-emerald-600 dark:text-emerald-400">
-                          {formatCurrency(p.amount)}
+                          <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                            {p.isCorrected && (
+                              <Badge variant="purple" className="text-[10px]">Corrected</Badge>
+                            )}
+                            <span>{formatCurrency(p.amount)}</span>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3.5 text-right whitespace-nowrap">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-xs h-7 px-2 border-amber-300 dark:border-amber-800/80 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30 font-semibold"
+                            onClick={() => setCorrectingPayment(p)}
+                          >
+                            Correct
+                          </Button>
                         </td>
                       </tr>
                     );
@@ -603,11 +913,14 @@ export default function PaymentsCollectionPage() {
       {/* Record Payment Modal */}
       <RecordPaymentModal
         isOpen={paymentModalOpen}
+        showAllocationPreviewNotice
         onClose={() => {
           setPaymentModalOpen(false);
           setSelectedOrderForPayment(null);
+          setSelectedClientForPayment(null);
         }}
         order={selectedOrderForPayment}
+        client={selectedClientForPayment}
       />
 
       {/* Direct Sale Modal */}
@@ -629,6 +942,13 @@ export default function PaymentsCollectionPage() {
           onRecordPayment={() => handleOpenPayment(historyModalOrder)}
         />
       )}
+
+      {/* Admin Payment Correction Modal */}
+      <CorrectPaymentModal
+        isOpen={!!correctingPayment}
+        payment={correctingPayment}
+        onClose={() => setCorrectingPayment(null)}
+      />
     </div>
   );
 }

@@ -1,12 +1,14 @@
-import { useState, useMemo } from 'react';
-import { BookOpen, TrendingUp, TrendingDown, Download, MapIcon, Users, Clock, CheckCircle2, Wallet } from 'lucide-react';
+import { useState, useMemo, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { BookOpen, TrendingUp, TrendingDown, Download, MapIcon, Users, Clock, CheckCircle2, Wallet, Calendar, Printer } from 'lucide-react';
 import { useDataStore } from '../../stores/dataStore';
 import { useDivisionStore } from '../../stores/divisionStore';
 import { Button, Badge, Card, PageHeader } from '../../components/ui';
-import { formatCurrency } from '../../lib/utils';
+import { formatCurrency, cn } from '../../lib/utils';
 import { format } from 'date-fns';
 import { type Region, type FilterDivision } from '../../types';
 import { getClientMetrics } from '../../lib/billing';
+import { printClientStatement, printOrderInvoice } from '../../lib/invoicePrint';
 
 interface LedgerEntry {
   id: string;
@@ -21,6 +23,7 @@ interface LedgerEntry {
   excessCredit?: number;
   creditApplied?: number;
   appliedAmount?: number;
+  appliedToPrevious?: number;
   isAdvance?: boolean;
 }
 
@@ -28,7 +31,7 @@ const STORAGE_KEY_REGION = 'ledger_selected_region';
 const STORAGE_KEY_CLIENT = 'ledger_selected_client';
 
 export default function ClientLedgerPage() {
-  const { clients, regions, ledger } = useDataStore();
+  const { clients, regions, ledger, orders, payments, products } = useDataStore();
   const { activeDivision } = useDivisionStore();
 
   const activeClients = useMemo(() => clients.filter(c => c.status === 'active' && !c.deletedAt), [clients]);
@@ -45,13 +48,40 @@ export default function ClientLedgerPage() {
   );
 
   // ── Client state — persisted, but validated against current region's clients ──
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Date filters
+  const [fromDate, setFromDate] = useState<string>('');
+  const [toDate, setToDate] = useState<string>('');
+
   const [clientId, setClientId] = useState<string>(() => {
+    const urlClient = searchParams.get('client') || searchParams.get('clientId') || searchParams.get('id');
+    if (urlClient) {
+      const match = clients.find(c => c.id === urlClient && !c.deletedAt);
+      if (match) return urlClient;
+    }
     const savedRegion = sessionStorage.getItem(STORAGE_KEY_REGION) || '';
     const savedClient = sessionStorage.getItem(STORAGE_KEY_CLIENT) || '';
     if (!savedRegion || !savedClient) return '';
     const clientStillInRegion = clients.find(c => c.id === savedClient && c.region === savedRegion && !c.deletedAt);
     return clientStillInRegion ? savedClient : '';
   });
+
+  // Sync with URL query parameter
+  useEffect(() => {
+    const urlClient = searchParams.get('client') || searchParams.get('clientId') || searchParams.get('id');
+    if (urlClient && urlClient !== clientId) {
+      const match = clients.find(c => c.id === urlClient && !c.deletedAt);
+      if (match) {
+        if (match.region && match.region !== selectedRegion) {
+          setSelectedRegion(match.region);
+          sessionStorage.setItem(STORAGE_KEY_REGION, match.region);
+        }
+        setClientId(urlClient);
+        sessionStorage.setItem(STORAGE_KEY_CLIENT, urlClient);
+      }
+    }
+  }, [searchParams, clients]);
 
   const handleRegionChange = (region: Region | '') => {
     setSelectedRegion(region);
@@ -63,6 +93,33 @@ export default function ClientLedgerPage() {
   const handleClientChange = (id: string) => {
     setClientId(id);
     sessionStorage.setItem(STORAGE_KEY_CLIENT, id);
+    if (id) {
+      setSearchParams({ client: id });
+    } else {
+      setSearchParams({});
+    }
+  };
+
+  const handleViewInvoice = (entry: LedgerEntry) => {
+    const invId = entry.id;
+    const order = orders.find(o => o.id === invId);
+    if (order) {
+      printOrderInvoice({ order, client, payments, products, ledger });
+    } else {
+      const fallbackOrder = {
+        id: invId,
+        clientId: client?.id || '',
+        clientName: client?.name || '',
+        subtotal: entry.debit,
+        total: entry.debit,
+        paidAmount: 0,
+        paymentStatus: 'pending' as const,
+        deliveryDate: entry.date.substring(0, 10),
+        division: (entry.division || 'primary') as any,
+        items: [{ productName: entry.description || 'Invoice Items', qty: 1, unitPrice: entry.debit, total: entry.debit }],
+      };
+      printOrderInvoice({ order: fallbackOrder as any, client, payments, products, ledger });
+    }
   };
 
   const client = useMemo(() => clients.find(c => c.id === clientId), [clientId, clients]);
@@ -73,7 +130,6 @@ export default function ClientLedgerPage() {
     const clientLedger = ledger.filter(l => {
       if (l.clientId !== clientId) return false;
       if (activeDivision !== 'all') {
-        // Legacy entries tagged 'all' or with no division are included in both views
         const d = l.division;
         if (d && d !== 'all' && d !== activeDivision) return false;
       }
@@ -100,21 +156,53 @@ export default function ClientLedgerPage() {
         excessCredit: l.excessCredit,
         creditApplied: l.creditApplied,
         appliedAmount: l.appliedAmount,
+        appliedToPrevious: l.appliedToPrevious,
         isAdvance: l.isAdvance,
       };
     });
 
     entries.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    let runningBalance = 0;
+    // Calculate opening balance before fromDate if set
+    let periodOpening = 0;
+    const filteredByDate: Omit<LedgerEntry, 'balance'>[] = [];
+
+    for (const entry of entries) {
+      const entryDay = entry.date.substring(0, 10);
+      if (fromDate && entryDay < fromDate) {
+        periodOpening += entry.debit - entry.credit;
+        continue;
+      }
+      if (toDate && entryDay > toDate) {
+        continue;
+      }
+      filteredByDate.push(entry);
+    }
+
+    let runningBalance = periodOpening;
     let tDebit = 0;
     let tCredit = 0;
-    const finalEntries: LedgerEntry[] = entries.map(e => {
+    const finalEntries: LedgerEntry[] = [];
+
+    if (fromDate && periodOpening !== 0) {
+      finalEntries.push({
+        id: 'period-opening',
+        date: fromDate,
+        displayDate: format(new Date(`${fromDate}T00:00:00`), 'MMM d, yyyy'),
+        type: 'opening_balance',
+        description: `Previous Balance as of ${format(new Date(`${fromDate}T00:00:00`), 'dd MMM yyyy')}`,
+        debit: periodOpening > 0 ? periodOpening : 0,
+        credit: periodOpening < 0 ? Math.abs(periodOpening) : 0,
+        balance: periodOpening,
+      });
+    }
+
+    for (const e of filteredByDate) {
       tDebit += e.debit;
       tCredit += e.credit;
       runningBalance += (e.debit - e.credit);
-      return { ...e, balance: runningBalance };
-    });
+      finalEntries.push({ ...e, balance: runningBalance });
+    }
 
     return {
       ledgerEntries: finalEntries.reverse(),
@@ -122,12 +210,23 @@ export default function ClientLedgerPage() {
       totalCredit: tCredit,
       currentBalance: runningBalance
     };
-  }, [clientId, ledger, activeDivision]);
+  }, [clientId, ledger, activeDivision, fromDate, toDate]);
 
   const metrics = useMemo(() => clientId ? getClientMetrics(clientId, activeDivision) : null, [clientId, activeDivision, ledger]);
 
+  const handleExportPDF = () => {
+    if (!client || !metrics) return;
+    printClientStatement({
+      client,
+      entries: ledgerEntries,
+      metrics,
+      division: activeDivision,
+      dateRange: fromDate || toDate ? { from: fromDate, to: toDate } : undefined,
+    });
+  };
+
   const selectClass = "w-full px-4 py-3.5 text-sm rounded-2xl transition-all duration-200 outline-none font-medium appearance-none bg-no-repeat bg-[var(--color-input-bg)] text-[var(--color-text-main)] border-2 border-transparent focus:border-[var(--color-primary)] focus:bg-[var(--color-card)] shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed";
-  const chevronBg = { backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239CA3AF'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`, backgroundPosition: 'right 1rem center', backgroundSize: '1.25rem 1.25rem' };
+  const chevronBg = { backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239CA3AF'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`, backgroundPosition: 'right 1rem center', backgroundSize: '1.25rem 1.25rem', backgroundRepeat: 'no-repeat' };
 
   return (
     <div className="max-w-7xl mx-auto pb-12">
@@ -135,7 +234,15 @@ export default function ClientLedgerPage() {
         title="Client Ledger"
         description="View detailed account statements and outstanding balances."
         actions={
-          <Button variant="outline" size="md" icon={<Download className="w-4 h-4" />}>Export PDF</Button>
+          <Button
+            variant="outline"
+            size="md"
+            icon={<Download className="w-4 h-4" />}
+            onClick={handleExportPDF}
+            disabled={!client}
+          >
+            Export PDF
+          </Button>
         }
       />
 
@@ -258,7 +365,11 @@ export default function ClientLedgerPage() {
                 <div>
                   <p className="text-sm font-bold text-[var(--color-text-muted)]">Available Credit</p>
                   {activeDivision === 'all' && metrics && (
-                    <p className="text-[10px] text-gray-400">P: {formatCurrency(metrics.primaryCredit)} · B: {formatCurrency(metrics.bakeryCredit)}</p>
+                    <p className="text-[10px] text-gray-400">
+                      {metrics.primaryCredit > 0 || metrics.bakeryCredit > 0
+                        ? `P: ${formatCurrency(metrics.primaryCredit)} · B: ${formatCurrency(metrics.bakeryCredit)}`
+                        : (metrics.credit > 0 ? 'Unified Client Credit' : 'P: ₹0.00 · B: ₹0.00')}
+                    </p>
                   )}
                 </div>
               </div>
@@ -274,14 +385,62 @@ export default function ClientLedgerPage() {
           </div>
 
           <Card padding={false} className="overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 dark:border-white/[0.05] bg-gray-50/50 dark:bg-black/10">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between px-6 py-5 border-b border-gray-100 dark:border-white/[0.05] bg-gray-50/50 dark:bg-black/10 gap-3">
               <div>
                 <h2 className="text-base font-semibold text-[var(--color-text-main)]">Account Statement</h2>
                 <p className="text-xs font-medium text-[var(--color-text-muted)] mt-1">
                   {client.name} — {activeDivision === 'all' ? 'All Divisions' : activeDivision === 'primary' ? 'Primary Foods' : 'Bakery Foods'}
                 </p>
               </div>
-              <BookOpen className="w-5 h-5 text-gray-400" />
+
+              {/* Date Filters */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-bold text-gray-500 flex items-center gap-1">
+                  <Calendar className="w-3.5 h-3.5" /> Filter:
+                </span>
+                <input
+                  type="date"
+                  value={fromDate}
+                  onChange={e => setFromDate(e.target.value)}
+                  className="px-2.5 py-1 text-xs font-medium rounded-lg border border-gray-200 dark:border-gray-800 bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] cursor-pointer"
+                />
+                <span className="text-xs text-gray-400">to</span>
+                <input
+                  type="date"
+                  value={toDate}
+                  onChange={e => setToDate(e.target.value)}
+                  className="px-2.5 py-1 text-xs font-medium rounded-lg border border-gray-200 dark:border-gray-800 bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] cursor-pointer"
+                />
+                {(fromDate || toDate) && (
+                  <button
+                    onClick={() => { setFromDate(''); setToDate(''); }}
+                    className="text-xs text-red-600 hover:text-red-700 font-bold ml-1"
+                  >
+                    Clear
+                  </button>
+                )}
+
+                {client && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    icon={<Printer className="w-3.5 h-3.5" />}
+                    onClick={() => {
+                      if (!client || !metrics) return;
+                      printClientStatement({
+                        client,
+                        entries: ledgerEntries,
+                        metrics,
+                        division: activeDivision,
+                        dateRange: fromDate || toDate ? { from: fromDate, to: toDate } : undefined,
+                      });
+                    }}
+                    className="text-xs h-8 ml-2"
+                  >
+                    Print Statement
+                  </Button>
+                )}
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm border-collapse">
@@ -300,9 +459,21 @@ export default function ClientLedgerPage() {
                     <tr key={entry.id} className={`transition-colors hover:bg-gray-50/80 dark:hover:bg-gray-800/30 ${entry.type === 'invoice' ? '' : entry.type === 'opening_balance' ? 'bg-purple-50/20 dark:bg-purple-950/10' : 'bg-[var(--color-success-bg)]/[0.3] dark:bg-[var(--color-success)]/[0.05]'}`}>
                       <td className="px-6 py-4 text-xs font-medium text-gray-500 whitespace-nowrap">{entry.displayDate}</td>
                       <td className="px-6 py-4">
-                        <Badge variant={entry.type === 'invoice' ? 'info' : entry.type === 'opening_balance' ? 'purple' : 'success'}>
-                          {entry.type === 'invoice' ? 'Invoice' : entry.type === 'opening_balance' ? 'Opening Balance' : 'Payment'}
-                        </Badge>
+                        <div className="flex items-center gap-1.5">
+                          <Badge variant={entry.type === 'invoice' ? 'info' : entry.type === 'opening_balance' ? 'purple' : 'success'}>
+                            {entry.type === 'invoice' ? 'Invoice' : entry.type === 'opening_balance' ? 'Opening Balance' : 'Payment'}
+                          </Badge>
+                          {entry.type === 'invoice' && (
+                            <button
+                              type="button"
+                              onClick={() => handleViewInvoice(entry)}
+                              className="p-1 rounded text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors"
+                              title="Print / View Invoice"
+                            >
+                              <Printer className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2 flex-wrap">
@@ -313,6 +484,11 @@ export default function ClientLedgerPage() {
                             </span>
                           )}
                         </div>
+                        {entry.appliedToPrevious && entry.appliedToPrevious > 0 ? (
+                          <p className="text-[10px] font-semibold text-blue-600 dark:text-blue-400 mt-0.5">
+                            Applied to Previous Balance: {formatCurrency(entry.appliedToPrevious)}
+                          </p>
+                        ) : null}
                         {entry.excessCredit && entry.excessCredit > 0 ? (
                           <p className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 mt-0.5">
                             Advance Credit Created: +{formatCurrency(entry.excessCredit)}

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { X, Plus, Trash2, ShoppingBag, CreditCard, Calendar, UserCheck, AlertCircle, Check } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
@@ -61,6 +61,15 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess }: DirectSa
 
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
+  const [idempotencyKey, setIdempotencyKey] = useState<string>(
+    () => `pay_direct_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
+  );
+
+  useEffect(() => {
+    if (isOpen) {
+      setIdempotencyKey(`pay_direct_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`);
+    }
+  }, [isOpen]);
 
   // Calculate totals
   const subtotal = useMemo(() => {
@@ -195,14 +204,17 @@ export default function DirectSaleModal({ isOpen, onClose, onSuccess }: DirectSa
     setLoading(true);
 
     try {
-      const orderId = await createDirectSale({
-        date: saleDate,
-        items: validItems,
-        division: selectedDivision,
-        notes: notes.trim() || undefined,
-        reference: reference.trim() || undefined,
-        payment: paymentPayload,
-      });
+      const orderId = await createDirectSale(
+        {
+          date: saleDate,
+          items: validItems,
+          division: selectedDivision,
+          notes: notes.trim() || undefined,
+          reference: reference.trim() || undefined,
+          payment: paymentPayload,
+        },
+        idempotencyKey
+      );
 
       toast.success(
         `Direct Sale of ${formatCurrency(total)} created successfully.${

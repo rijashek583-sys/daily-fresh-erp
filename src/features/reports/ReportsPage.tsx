@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Download, Calendar } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { Download, Calendar, ChevronDown, BarChart3, Package } from 'lucide-react';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -9,10 +10,11 @@ import { useDataStore } from '../../stores/dataStore';
 import { isToday, isThisMonth } from 'date-fns';
 import { useDivisionStore } from '../../stores/divisionStore';
 import { PageHeader, Card, StatCard, Badge, Button } from '../../components/ui';
-import { formatCurrency } from '../../lib/utils';
-import { getClientOutstanding } from '../../lib/billing';
+import { formatCurrency, cn, getProductDivision } from '../../lib/utils';
+import { getClientOutstanding, getClientCredit } from '../../lib/billing';
 import { toast } from 'sonner';
-
+import ProductSalesReportTab from './ProductSalesReportTab';
+import BalanceReceivableSection from './BalanceReceivableSection';
 
 const CHART_COLORS = ['#B91C1C', '#DC2626', '#EF4444', '#F87171', '#FCA5A5'];
 const PIE_COLORS = ['#B91C1C', '#8B5CF6', '#10B981', '#F59E0B'];
@@ -25,7 +27,20 @@ const productSales = [
 ];
 
 export default function ReportsPage() {
-  const { orders, clients, payments, ledger } = useDataStore();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab') === 'overview' ? 'overview' : 'product-sales';
+  const [activeTab, setActiveTab] = useState<'product-sales' | 'overview'>(initialTab);
+
+  const handleTabChange = (tab: 'product-sales' | 'overview') => {
+    setActiveTab(tab);
+    setSearchParams(prev => {
+      const p = new URLSearchParams(prev);
+      p.set('tab', tab);
+      return p;
+    }, { replace: true });
+  };
+
+  const { orders, clients, payments, ledger, products } = useDataStore();
   const { activeDivision } = useDivisionStore();
   const [dateRange, setDateRange] = useState('This Month');
 
@@ -72,11 +87,16 @@ export default function ReportsPage() {
           targetMonth.revenue += amt;
         }
 
-        // Product sales aggregation
+        // Product sales aggregation (respect division attribution on ledger entry to prevent duplicate counting)
         if (l.invoiceId) {
           const order = orders.find(o => o.id === l.invoiceId);
           if (order) {
             order.items.forEach(item => {
+              if (l.division && l.division !== 'all') {
+                const prod = products.find(p => p.id === item.productId || p.name === item.productName);
+                const itemDiv = prod?.division || getProductDivision(prod || { name: item.productName });
+                if (itemDiv !== l.division) return;
+              }
               const p = prodSalesMap.get(item.productName) || 0;
               prodSalesMap.set(item.productName, p + item.total);
             });
@@ -107,10 +127,7 @@ export default function ReportsPage() {
 
     const activeClientsList = clients.filter(c => !c.deletedAt && c.status === 'active');
     const outstanding = activeClientsList.reduce((sum, c) => sum + Math.max(0, getClientOutstanding(c.id, activeDivision)), 0);
-    const totalAdvanceCredits = activeClientsList.reduce((sum, c) => {
-      const bal = getClientOutstanding(c.id, activeDivision);
-      return sum + (bal < 0 ? Math.abs(bal) : 0);
-    }, 0);
+    const totalAdvanceCredits = activeClientsList.reduce((sum, c) => sum + getClientCredit(c.id, activeDivision), 0);
     
     const dailyColl = validPayments
       .filter(p => isToday(new Date(p.billDate || p.createdAt)))
@@ -156,55 +173,88 @@ export default function ReportsPage() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto pb-10">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
-        <PageHeader
-          title="Business Reports"
-          description="Comprehensive insights into revenue, clients, and product performance."
-          actions={
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-full pl-4 pr-2 py-1 shadow-sm">
-                <Calendar className="w-4 h-4 text-gray-400" />
-                <select
-                  value={dateRange}
-                  onChange={e => setDateRange(e.target.value)}
-                  className="bg-transparent text-sm font-semibold text-[var(--color-text-main)] outline-none cursor-pointer appearance-none pr-6"
-                  style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239CA3AF'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`, backgroundPosition: 'right center', backgroundSize: '1rem' }}
-                >
-                  <option>This Month</option>
-                  <option>Last Month</option>
-                  <option>Last 3 Months</option>
-                  <option>This Year</option>
-                </select>
-              </div>
-              <Button size="md" icon={<Download className="w-4 h-4" />} onClick={() => toast.success('Report downloaded')}>Export PDF</Button>
+    <div className="max-w-7xl mx-auto pb-10 space-y-6">
+      <PageHeader
+        title="Business Reports"
+        description="Comprehensive insights into product-wise sales, revenue, and client accounts."
+      />
+
+      {/* ── Top-level Tab Bar ── */}
+      <div className="flex items-center gap-2 border-b border-gray-200 dark:border-gray-800">
+        <button
+          onClick={() => handleTabChange('product-sales')}
+          className={cn(
+            'flex items-center gap-2 py-3 px-4 border-b-2 text-sm font-bold transition-all',
+            activeTab === 'product-sales'
+              ? 'border-[var(--color-primary)] text-[var(--color-primary)]'
+              : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-main)]'
+          )}
+        >
+          <Package className="w-4 h-4" />
+          Product Sales Report
+        </button>
+        <button
+          onClick={() => handleTabChange('overview')}
+          className={cn(
+            'flex items-center gap-2 py-3 px-4 border-b-2 text-sm font-bold transition-all',
+            activeTab === 'overview'
+              ? 'border-[var(--color-primary)] text-[var(--color-primary)]'
+              : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-main)]'
+          )}
+        >
+          <BarChart3 className="w-4 h-4" />
+          Financial Overview & Trends
+        </button>
+      </div>
+
+      {/* ── Tab Content ── */}
+      {activeTab === 'product-sales' ? (
+        <ProductSalesReportTab />
+      ) : (
+        <div className="space-y-8">
+          {/* Controls for Overview */}
+          <div className="flex justify-end">
+            <div className="relative flex items-center bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-full pl-3.5 pr-8 py-1.5 shadow-sm">
+              <Calendar className="w-4 h-4 text-gray-400 mr-2 shrink-0" />
+              <select
+                value={dateRange}
+                onChange={e => setDateRange(e.target.value)}
+                className="bg-transparent text-xs sm:text-sm font-semibold text-[var(--color-text-main)] outline-none cursor-pointer appearance-none pr-1"
+              >
+                <option>This Month</option>
+                <option>Last Month</option>
+                <option>Last 3 Months</option>
+                <option>This Year</option>
+              </select>
+              <ChevronDown className="w-3.5 h-3.5 text-gray-400 absolute right-2.5 pointer-events-none" />
             </div>
-          }
-        />
-      </div>
+          </div>
 
-      {/* KPI Summary */}
-      <div className="grid grid-cols-4 gap-6 mb-8">
-        <StatCard label="Total Revenue" value={formatCurrency(totalRevenue)} icon={<span className="font-serif italic text-xl">₹</span>} />
-        <StatCard
-          label="Outstanding Payments"
-          value={formatCurrency(outstandingPayments)}
-          subtitle={totalAdvanceCredits > 0 ? `${formatCurrency(totalAdvanceCredits)} in client credits` : undefined}
-          icon={<span className="font-semibold text-xl">{outstandingPayments > 0 ? 'Out' : '✓'}</span>}
-          iconBg={outstandingPayments > 0 ? "bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400" : "bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400"}
-        />
-        <StatCard label="Daily Collection" value={formatCurrency(dailyCollection)} icon={<span className="font-semibold text-xl">Day</span>} iconBg="bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400" />
-        <StatCard label="Monthly Collection" value={formatCurrency(monthlyCollection)} icon={<span className="font-semibold text-xl">Mon</span>} iconBg="bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400" />
-      </div>
+          {/* KPI Summary */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
+            <StatCard label="Total Revenue" value={formatCurrency(totalRevenue)} icon={<span className="font-serif italic text-xl">₹</span>} />
+            <StatCard
+              label="Outstanding Payments"
+              value={formatCurrency(outstandingPayments)}
+              subtitle={totalAdvanceCredits > 0 ? `${formatCurrency(totalAdvanceCredits)} in client credits` : undefined}
+              icon={<span className="font-semibold text-xl">{outstandingPayments > 0 ? 'Out' : '✓'}</span>}
+              iconBg={outstandingPayments > 0 ? "bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400" : "bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400"}
+            />
+            <StatCard label="Daily Collection" value={formatCurrency(dailyCollection)} icon={<span className="font-semibold text-xl">Day</span>} iconBg="bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400" />
+            <StatCard label="Monthly Collection" value={formatCurrency(monthlyCollection)} icon={<span className="font-semibold text-xl">Mon</span>} iconBg="bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400" />
+          </div>
 
-      <div className="grid grid-cols-2 gap-8 mb-8 items-stretch">
+          {/* ── Division-Wise Balance Receivable Section ── */}
+          <BalanceReceivableSection />
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 sm:gap-8 mb-8 items-stretch">
         {/* Revenue Trend */}
         <Card padding={false} className="flex flex-col h-full">
-          <div className="px-8 py-6 border-b border-gray-100 dark:border-white/[0.05]">
+          <div className="px-5 sm:px-8 py-4 sm:py-6 border-b border-gray-100 dark:border-white/[0.05]">
             <h3 className="text-base font-semibold text-[var(--color-text-main)]">Revenue Trend</h3>
             <p className="text-xs font-medium text-[var(--color-text-muted)] mt-1">Monthly gross revenue over the year.</p>
           </div>
-          <div className="p-6 h-[320px]">
+          <div className="p-3 sm:p-6 h-[280px] sm:h-[320px]">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={monthlyRev} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <defs>
@@ -225,16 +275,16 @@ export default function ReportsPage() {
 
         {/* Client Performance */}
         <Card padding={false} className="flex flex-col h-full">
-          <div className="px-8 py-6 border-b border-gray-100 dark:border-white/[0.05]">
+          <div className="px-5 sm:px-8 py-4 sm:py-6 border-b border-gray-100 dark:border-white/[0.05]">
             <h3 className="text-base font-semibold text-[var(--color-text-main)]">Top Client Revenue</h3>
             <p className="text-xs font-medium text-[var(--color-text-muted)] mt-1">Highest contributing clients.</p>
           </div>
-          <div className="p-6 h-[320px]">
+          <div className="p-3 sm:p-6 h-[280px] sm:h-[320px]">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={computedTopClients} layout="vertical" margin={{ top: 10, right: 30, left: 40, bottom: 0 }}>
+              <BarChart data={computedTopClients} layout="vertical" margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="4 4" horizontal={false} stroke="var(--color-border)" />
                 <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 11, fontWeight: 600, fill: 'var(--color-text-muted)' }} tickFormatter={v => `₹${v/1000}k`} />
-                <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} tick={{ fontSize: 11, fontWeight: 700, fill: 'var(--color-text-main)' }} dx={-10} />
+                <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 700, fill: 'var(--color-text-main)' }} width={80} />
                 <Tooltip content={<CustomTooltip />} cursor={{ fill: 'var(--color-primary)', opacity: 0.05 }} />
                 <Bar dataKey="revenue" name="Revenue" radius={[0, 4, 4, 0]} maxBarSize={32}>
                   {computedTopClients.map((_, index) => (
@@ -248,11 +298,11 @@ export default function ReportsPage() {
 
         {/* Product Sales Breakdown */}
         <Card padding={false} className="flex flex-col h-full">
-          <div className="px-8 py-6 border-b border-gray-100 dark:border-white/[0.05]">
+          <div className="px-5 sm:px-8 py-4 sm:py-6 border-b border-gray-100 dark:border-white/[0.05]">
             <h3 className="text-base font-semibold text-[var(--color-text-main)]">Sales by Product Category</h3>
             <p className="text-xs font-medium text-[var(--color-text-muted)] mt-1">Revenue distribution.</p>
           </div>
-          <div className="p-6 h-[300px] flex items-center justify-center relative">
+          <div className="p-3 sm:p-6 h-[280px] sm:h-[300px] flex items-center justify-center relative">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -283,11 +333,11 @@ export default function ReportsPage() {
 
         {/* Recent Client Trends */}
         <Card padding={false} className="flex flex-col h-full">
-          <div className="px-8 py-6 border-b border-gray-100 dark:border-white/[0.05]">
+          <div className="px-5 sm:px-8 py-4 sm:py-6 border-b border-gray-100 dark:border-white/[0.05]">
             <h3 className="text-base font-semibold text-[var(--color-text-main)]">Client Growth Momentum</h3>
             <p className="text-xs font-medium text-[var(--color-text-muted)] mt-1">MoM growth percentage per client.</p>
           </div>
-          <div className="flex-1 overflow-y-auto p-8 space-y-6">
+          <div className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-4 sm:space-y-6">
             {computedTopClients.map((client) => (
               <div key={client.name} className="flex items-center gap-4">
                 <div className={`w-10 h-10 rounded-full flex items-center justify-center font-medium ${client.trend > 0 ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-red-100 dark:bg-red-900/30 text-red-600'}`}>
@@ -312,6 +362,8 @@ export default function ReportsPage() {
           </div>
         </Card>
       </div>
+      </div>
+      )}
     </div>
   );
 }

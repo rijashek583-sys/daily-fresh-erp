@@ -1,14 +1,16 @@
-import { useState, useMemo } from 'react';
-import { FileText, Download, Search, Calendar, MapIcon, Users, CheckCircle2, X, Eye } from 'lucide-react';
+import { useState, useMemo, useRef } from 'react';
+import { FileText, Download, Search, Calendar, MapIcon, Users, X, Eye, Share2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { type Region, type Division, type PaymentMethod } from '../../types';
 import { useDataStore } from '../../stores/dataStore';
 import { Card, PageHeader, SearchInput, Button } from '../../components/ui';
-import { formatCurrency, cn, getProductDivision } from '../../lib/utils';
-import { calculateOldBalance, calculatePaymentsOnDate, recordPayment, getPaymentUpdateInfo } from '../../lib/billing';
+import { formatCurrency, cn, getProductDivision, getTodayLocalDateString } from '../../lib/utils';
+import { calculateOldBalance, recordPayment, getPaymentUpdateInfo, allocatePayment, round2 } from '../../lib/billing';
 import { useAuthStore } from '../../stores/authStore';
 import { useDivisionStore } from '../../stores/divisionStore';
 import { toast } from 'sonner';
+import { printDailyBillInvoice } from '../../lib/invoicePrint';
+import { shareDailyBillJpg } from '../../lib/billImageGenerator';
 
 interface DailyBillRow {
   clientId: string;
@@ -17,6 +19,7 @@ interface DailyBillRow {
   deliveryDate: string;
   billNumber: string;
   items: { productName: string; qty: number; unitPrice: number; total: number; division: string }[];
+  clientPhone?: string;
   // Combined
   subtotal: number;
   oldBalance: number;
@@ -36,10 +39,21 @@ interface DailyBillRow {
   bakeryExcess: number;
   primaryCreditApplied: number;
   bakeryCreditApplied: number;
+  primaryAppliedToBill: number;
+  primaryAppliedToPrevious: number;
+  primaryBillRemaining: number;
+  primaryPreviousRemaining: number;
+  bakeryAppliedToBill: number;
+  bakeryAppliedToPrevious: number;
+  bakeryBillRemaining: number;
+  bakeryPreviousRemaining: number;
   primaryOutstanding: number;
   bakeryOutstanding: number;
   updatedInfo: string | null;
+  staffName?: string;
   invoiceId: string;
+  primaryInvoiceId?: string | null;
+  bakeryInvoiceId?: string | null;
 }
 
 export default function DailyBillingPage() {
@@ -58,6 +72,9 @@ export default function DailyBillingPage() {
   // Modals
   const [paymentModalRow, setPaymentModalRow] = useState<DailyBillRow | null>(null);
   const [viewBillRow, setViewBillRow] = useState<DailyBillRow | null>(null);
+  const isSubmittingRef = useRef(false);
+  const [isSavingPayment, setIsSavingPayment] = useState(false);
+  const [isSharingJpg, setIsSharingJpg] = useState(false);
 
   // Per-division payment state — keyed by division so switching tabs never loses entered values
   interface DivisionPaymentState {
@@ -65,7 +82,7 @@ export default function DailyBillingPage() {
     method: PaymentMethod;
     reference: string;
   }
-  const [paymentDate, setPaymentDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
+  const [paymentDate, setPaymentDate] = useState<string>(getTodayLocalDateString());
   const [paymentNotes, setPaymentNotes] = useState<string>('');
   const [paymentInvoiceId, setPaymentInvoiceId] = useState<string>('');
   const [activePaymentDiv, setActivePaymentDiv] = useState<Division>('primary');
@@ -73,9 +90,11 @@ export default function DailyBillingPage() {
     primary: { amount: '0', method: 'cash', reference: '' },
     bakery:  { amount: '0', method: 'cash', reference: '' },
   });
+  const [paymentIdempotencyKeys, setPaymentIdempotencyKeys] = useState<{ primary: string; bakery: string }>({
+    primary: '',
+    bakery: '',
+  });
 
-  // Helpers to read/write the active division's state
-  const curDiv = divPaymentState[activePaymentDiv];
   const setDivField = (div: Division, field: keyof DivisionPaymentState, value: string) => {
     setDivPaymentState(prev => ({ ...prev, [div]: { ...prev[div], [field]: value } }));
   };
@@ -159,13 +178,24 @@ export default function DailyBillingPage() {
       let bakeryExcess = 0;
       let primaryCreditApplied = 0;
       let bakeryCreditApplied = 0;
+      let primaryAppliedToBill = 0;
+      let primaryAppliedToPrevious = 0;
+      let primaryBillRemaining = 0;
+      let primaryPreviousRemaining = 0;
+      let bakeryAppliedToBill = 0;
+      let bakeryAppliedToPrevious = 0;
+      let bakeryBillRemaining = 0;
+      let bakeryPreviousRemaining = 0;
+      let primaryOutstanding = 0;
+      let bakeryOutstanding = 0;
+      let clientDayPayments: any[] = [];
 
       if (!isDirect) {
-        primaryOldBalance = activeDivision === 'bakery' ? 0 : calculateOldBalance(clientId, filterDate, 'primary', currentInvoiceIds);
-        bakeryOldBalance  = activeDivision === 'primary' ? 0 : calculateOldBalance(clientId, filterDate, 'bakery',  currentInvoiceIds);
+        primaryOldBalance = calculateOldBalance(clientId, filterDate, 'primary', currentInvoiceIds);
+        bakeryOldBalance  = calculateOldBalance(clientId, filterDate, 'bakery',  currentInvoiceIds);
         
         const { payments } = useDataStore.getState();
-        const clientDayPayments = payments.filter(p => 
+        clientDayPayments = payments.filter(p => 
           p.clientId === clientId && 
           !p.deletedAt && 
           (p.billDate === filterDate || (p.paymentDate || p.createdAt).substring(0, 10) === filterDate)
@@ -175,15 +205,97 @@ export default function DailyBillingPage() {
         const bakeryDayPayments = clientDayPayments.filter(p => p.division === 'bakery');
 
         primaryReceived = primaryDayPayments.reduce((s, p) => s + (p.amount || 0), 0);
-        primaryPaid = primaryDayPayments.reduce((s, p) => s + (p.appliedAmount !== undefined ? p.appliedAmount : (p.amount || 0)), 0);
-        primaryExcess = primaryDayPayments.reduce((s, p) => s + (p.excessCredit || 0), 0);
-
         bakeryReceived = bakeryDayPayments.reduce((s, p) => s + (p.amount || 0), 0);
-        bakeryPaid = bakeryDayPayments.reduce((s, p) => s + (p.appliedAmount !== undefined ? p.appliedAmount : (p.amount || 0)), 0);
-        bakeryExcess = bakeryDayPayments.reduce((s, p) => s + (p.excessCredit || 0), 0);
 
         primaryCreditApplied = clientOrders.reduce((s, o) => s + (o.primaryCreditApplied || (o.division === 'primary' ? (o.creditApplied || 0) : 0) || 0), 0);
         bakeryCreditApplied = clientOrders.reduce((s, o) => s + (o.bakeryCreditApplied || (o.division === 'bakery' ? (o.creditApplied || 0) : 0) || 0), 0);
+
+        const primaryNetDue = Math.max(0, primarySubtotal - primaryCreditApplied);
+        const bakeryNetDue = Math.max(0, bakerySubtotal - bakeryCreditApplied);
+
+        const primaryOldBalanceVal = round2(primaryOldBalance);
+        const bakeryOldBalanceVal  = round2(bakeryOldBalance);
+
+        // Identify prior credit (when old balance is negative)
+        let priorCreditP = Math.max(0, -primaryOldBalanceVal);
+        let priorCreditB = Math.max(0, -bakeryOldBalanceVal);
+
+        // Apply prior credit to reduce today's net due before allocating cash payments
+        let effPrimaryNetDue = primaryNetDue;
+        let effBakeryNetDue = bakeryNetDue;
+
+        if (priorCreditP > 0 || priorCreditB > 0) {
+          const appliedPriorP = Math.min(priorCreditP, effPrimaryNetDue);
+          effPrimaryNetDue = round2(effPrimaryNetDue - appliedPriorP);
+          priorCreditP = round2(priorCreditP - appliedPriorP);
+
+          const appliedPriorB = Math.min(priorCreditB, effBakeryNetDue);
+          effBakeryNetDue = round2(effBakeryNetDue - appliedPriorB);
+          priorCreditB = round2(priorCreditB - appliedPriorB);
+
+          // Cross-division prior credit offset if surplus remains
+          if (priorCreditP > 0 && effBakeryNetDue > 0) {
+            const crossP = Math.min(priorCreditP, effBakeryNetDue);
+            effBakeryNetDue = round2(effBakeryNetDue - crossP);
+            priorCreditP = round2(priorCreditP - crossP);
+          }
+          if (priorCreditB > 0 && effPrimaryNetDue > 0) {
+            const crossB = Math.min(priorCreditB, effPrimaryNetDue);
+            effPrimaryNetDue = round2(effPrimaryNetDue - crossB);
+            priorCreditB = round2(priorCreditB - crossB);
+          }
+        }
+
+        const primaryPriorDebt = Math.max(0, primaryOldBalanceVal);
+        const bakeryPriorDebt  = Math.max(0, bakeryOldBalanceVal);
+        const totalClientDebt = round2(effPrimaryNetDue + primaryPriorDebt + effBakeryNetDue + bakeryPriorDebt);
+
+        // Allocate Primary payment
+        const primaryAlloc = allocatePayment({
+          paymentAmount: primaryReceived,
+          orderRemaining: effPrimaryNetDue,
+          otherOrderRemaining: effBakeryNetDue,
+          billDivisionPrior: primaryPriorDebt,
+          otherDivisionPrior: bakeryPriorDebt,
+          clientTotalOutstanding: totalClientDebt,
+          isDirectSale: false,
+          division: 'primary',
+        });
+
+        // Allocate Bakery payment against whatever remains after Primary allocation
+        const remainingBakeryNetDue = primaryAlloc.remainingOtherBill;
+        const remainingPrimaryNetDue = primaryAlloc.remainingBill;
+        const remainingBakeryOldBalance = primaryAlloc.remainingOtherDivision;
+        const remainingPrimaryOldBalance = primaryAlloc.remainingSameDivisionPrevious;
+        const remainingDebtAfterPrimary = round2(remainingBakeryNetDue + remainingPrimaryNetDue + remainingBakeryOldBalance + remainingPrimaryOldBalance);
+
+        const bakeryAlloc = allocatePayment({
+          paymentAmount: bakeryReceived,
+          orderRemaining: remainingBakeryNetDue,
+          otherOrderRemaining: remainingPrimaryNetDue,
+          billDivisionPrior: remainingBakeryOldBalance,
+          otherDivisionPrior: remainingPrimaryOldBalance,
+          clientTotalOutstanding: remainingDebtAfterPrimary,
+          isDirectSale: false,
+          division: 'bakery',
+        });
+
+        primaryAppliedToBill = round2(primaryAlloc.appliedToBill + bakeryAlloc.appliedToOtherBill);
+        primaryBillRemaining = bakeryAlloc.remainingOtherBill;
+        primaryAppliedToPrevious = round2(primaryAlloc.appliedToSameDivisionPrevious + bakeryAlloc.appliedToOtherDivisionPrevious);
+        primaryPreviousRemaining = bakeryAlloc.remainingOtherDivision;
+        primaryPaid = round2(primaryAppliedToBill + primaryAppliedToPrevious);
+
+        bakeryAppliedToBill = round2(bakeryAlloc.appliedToBill + primaryAlloc.appliedToOtherBill);
+        bakeryBillRemaining = bakeryAlloc.remainingBill;
+        bakeryAppliedToPrevious = round2(bakeryAlloc.appliedToSameDivisionPrevious + primaryAlloc.appliedToOtherDivisionPrevious);
+        bakeryPreviousRemaining = bakeryAlloc.remainingSameDivisionPrevious;
+        bakeryPaid = round2(bakeryAppliedToBill + bakeryAppliedToPrevious);
+
+        primaryOutstanding = round2(primaryBillRemaining + primaryPreviousRemaining);
+        bakeryOutstanding = round2(bakeryBillRemaining + bakeryPreviousRemaining);
+        primaryExcess = round2(primaryAlloc.excessCredit + priorCreditP);
+        bakeryExcess = round2(bakeryAlloc.excessCredit + priorCreditB);
       } else {
         // Direct sales have no old balance. Payments are read from order invoiceId.
         const { payments } = useDataStore.getState();
@@ -192,20 +304,42 @@ export default function DailyBillingPage() {
         const bPayments = orderPayments.filter(p => p.division === 'bakery');
         
         primaryReceived = pPayments.reduce((s, p) => s + (p.amount || 0), 0);
-        primaryPaid = primaryReceived;
-        bakeryReceived = bPayments.reduce((s, p) => s + (p.amount || 0), 0);
-        bakeryPaid = bakeryReceived;
-      }
+        const pAlloc = allocatePayment({
+          paymentAmount: primaryReceived,
+          orderRemaining: primarySubtotal,
+          otherOrderRemaining: bakerySubtotal,
+          clientTotalOutstanding: primarySubtotal + bakerySubtotal,
+          isDirectSale: true,
+          division: 'primary',
+        });
 
-      const primaryOutstanding = Math.max(0, (primarySubtotal + primaryOldBalance) - primaryPaid);
-      const bakeryOutstanding  = Math.max(0, (bakerySubtotal  + bakeryOldBalance)  - bakeryPaid);
+        bakeryReceived = bPayments.reduce((s, p) => s + (p.amount || 0), 0);
+        const bAlloc = allocatePayment({
+          paymentAmount: bakeryReceived,
+          orderRemaining: pAlloc.remainingOtherBill,
+          otherOrderRemaining: pAlloc.remainingBill,
+          clientTotalOutstanding: pAlloc.remainingBill + pAlloc.remainingOtherBill,
+          isDirectSale: true,
+          division: 'bakery',
+        });
+
+        primaryAppliedToBill = round2(pAlloc.appliedToBill + bAlloc.appliedToOtherBill);
+        primaryPaid = primaryAppliedToBill;
+        primaryBillRemaining = bAlloc.remainingOtherBill;
+        primaryOutstanding = primaryBillRemaining;
+
+        bakeryAppliedToBill = round2(bAlloc.appliedToBill + pAlloc.appliedToOtherBill);
+        bakeryPaid = bakeryAppliedToBill;
+        bakeryBillRemaining = bAlloc.remainingBill;
+        bakeryOutstanding = bakeryBillRemaining;
+      }
 
       // Combined (for card display)
       const subtotal = primarySubtotal + bakerySubtotal;
       const oldBalance = primaryOldBalance + bakeryOldBalance;
       const grandTotal = subtotal + oldBalance;
       const paidAmount = primaryPaid + bakeryPaid;
-      const outstandingBalance = Math.max(0, (subtotal + oldBalance) - paidAmount);
+      const outstandingBalance = grandTotal <= 0 ? 0 : Math.max(0, round2(primaryOutstanding + bakeryOutstanding));
 
       const finalItems = [...primaryItems, ...bakeryItems];
 
@@ -218,15 +352,29 @@ export default function DailyBillingPage() {
         ? `BILL-DIRECT-${clientOrders[0].id.substring(0,6).toUpperCase()}-${filterDate.replace(/-/g, '')}`
         : `BILL-${clientId.substring(0,6).toUpperCase()}-${filterDate.replace(/-/g, '')}`;
       const updatedInfo = isDirect ? null : getPaymentUpdateInfo(clientId, filterDate, 'all');
+      const orderStaff = clientOrders.find(o => o.staffName)?.staffName;
+      const paymentStaff = !isDirect ? clientDayPayments.find(p => p.staffName)?.staffName : undefined;
+      const staffName = orderStaff || paymentStaff || undefined;
+
+      const primaryOrder = clientOrders.find(o => o.division === 'primary');
+      const bakeryOrder = clientOrders.find(o => o.division === 'bakery');
+      const primaryInvoiceId = primaryOrder?.id || (clientOrders[0]?.items?.some(i => getProductDivision({ name: i.productName }) === 'primary') ? clientOrders[0].id : null);
+      const bakeryInvoiceId = bakeryOrder?.id || (clientOrders[0]?.items?.some(i => getProductDivision({ name: i.productName }) === 'bakery') ? clientOrders[0].id : null);
 
       rows.push({
         clientId, clientName, region, deliveryDate: filterDate, billNumber,
+        clientPhone: isDirect ? '' : (clients.find(c => c.id === clientId)?.phone || ''),
         items, subtotal, oldBalance, grandTotal, paidAmount, outstandingBalance,
         primarySubtotal, bakerySubtotal, primaryOldBalance, bakeryOldBalance,
         primaryPaid, bakeryPaid, primaryReceived, bakeryReceived, primaryExcess, bakeryExcess,
         primaryCreditApplied, bakeryCreditApplied,
+        primaryAppliedToBill, primaryAppliedToPrevious,
+        primaryBillRemaining, primaryPreviousRemaining,
+        bakeryAppliedToBill, bakeryAppliedToPrevious,
+        bakeryBillRemaining, bakeryPreviousRemaining,
         primaryOutstanding, bakeryOutstanding,
-        updatedInfo, invoiceId: clientOrders[0].id
+        updatedInfo, staffName, invoiceId: clientOrders[0].id,
+        primaryInvoiceId, bakeryInvoiceId,
       });
     });
 
@@ -246,13 +394,25 @@ export default function DailyBillingPage() {
       primary: { amount: '0', method: 'cash', reference: '' },
       bakery:  { amount: '0', method: 'cash', reference: '' },
     });
-    setPaymentDate(format(new Date(), 'yyyy-MM-dd'));
+    setPaymentDate(getTodayLocalDateString());
     setPaymentNotes('');
     setPaymentInvoiceId(row.invoiceId);
+
+    // Task 4: Generate durable operation-specific idempotency keys once per payment intent
+    const genKey = (prefix: string) => {
+      const rand = typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID().replace(/-/g, '').slice(0, 16)
+        : Math.random().toString(36).substring(2, 10);
+      return `pay_db_${prefix}_${Date.now()}_${rand}`;
+    };
+    setPaymentIdempotencyKeys({
+      primary: genKey('p'),
+      bakery: genKey('b'),
+    });
   };
 
   const handleSavePartialPayment = async () => {
-    if (!paymentModalRow) return;
+    if (!paymentModalRow || isSubmittingRef.current || isSavingPayment) return;
 
     const primaryAmt = parseFloat(divPaymentState.primary.amount);
     const bakeryAmt  = parseFloat(divPaymentState.bakery.amount);
@@ -275,215 +435,99 @@ export default function DailyBillingPage() {
       }
     }
 
+    const effectivePaymentDate = isStaff ? getTodayLocalDateString() : (paymentDate || getTodayLocalDateString());
+
     const base = {
       orderType:  paymentModalRow.clientId === 'direct' ? 'direct' : 'client',
       clientId:   paymentModalRow.clientId,
       clientName: paymentModalRow.clientName,
       region:     paymentModalRow.region,
-      invoiceId:  paymentInvoiceId || null,
       updatedBy:  isStaff ? 'Staff' : 'Admin',
-      paymentDate,
+      paymentDate: effectivePaymentDate,
       billDate:   paymentModalRow.deliveryDate,
       notes:      paymentNotes,
     };
 
+    isSubmittingRef.current = true;
+    setIsSavingPayment(true);
+
     try {
       if (primaryValid) {
-        await recordPayment({ ...base, amount: primaryAmt, method: divPaymentState.primary.method, reference: divPaymentState.primary.reference, division: 'primary' });
+        const primaryOrderRemaining = paymentModalRow.primaryBillRemaining ?? paymentModalRow.primarySubtotal ?? 0;
+        const effectivePrimaryInvoiceId = (isDirect || primaryOrderRemaining > 0.005) ? (paymentModalRow.primaryInvoiceId || paymentInvoiceId || null) : null;
+        await recordPayment({
+          ...base,
+          invoiceId: effectivePrimaryInvoiceId,
+          otherInvoiceId: paymentModalRow.bakeryInvoiceId || null,
+          otherOrderRemaining: paymentModalRow.bakeryBillRemaining ?? paymentModalRow.bakerySubtotal ?? 0,
+          billDivisionPrior: paymentModalRow.primaryPreviousRemaining ?? paymentModalRow.primaryOldBalance ?? 0,
+          otherDivisionPrior: paymentModalRow.bakeryPreviousRemaining ?? paymentModalRow.bakeryOldBalance ?? 0,
+          amount: primaryAmt,
+          method: divPaymentState.primary.method,
+          reference: divPaymentState.primary.reference,
+          division: 'primary',
+          idempotencyKey: paymentIdempotencyKeys.primary,
+        });
       }
       if (bakeryValid) {
-        await recordPayment({ ...base, amount: bakeryAmt, method: divPaymentState.bakery.method, reference: divPaymentState.bakery.reference, division: 'bakery' });
+        const bakeryOrderRemaining = paymentModalRow.bakeryBillRemaining ?? paymentModalRow.bakerySubtotal ?? 0;
+        const effectiveBakeryInvoiceId = (isDirect || bakeryOrderRemaining > 0.005) ? (paymentModalRow.bakeryInvoiceId || paymentInvoiceId || null) : null;
+        await recordPayment({
+          ...base,
+          invoiceId: effectiveBakeryInvoiceId,
+          otherInvoiceId: paymentModalRow.primaryInvoiceId || null,
+          otherOrderRemaining: paymentModalRow.primaryBillRemaining ?? paymentModalRow.primarySubtotal ?? 0,
+          billDivisionPrior: paymentModalRow.bakeryPreviousRemaining ?? paymentModalRow.bakeryOldBalance ?? 0,
+          otherDivisionPrior: paymentModalRow.primaryPreviousRemaining ?? paymentModalRow.primaryOldBalance ?? 0,
+          amount: bakeryAmt,
+          method: divPaymentState.bakery.method,
+          reference: divPaymentState.bakery.reference,
+          division: 'bakery',
+          idempotencyKey: paymentIdempotencyKeys.bakery,
+        });
       }
       setPaymentModalRow(null);
-    } catch (_) {
-      // error toasted inside recordPayment
+      toast.success('Payment recorded successfully.');
+    } catch (err: any) {
+      console.error('Failed to record daily billing payment:', err);
+      toast.error(err?.message || 'Failed to record payment on trusted server.');
+    } finally {
+      isSubmittingRef.current = false;
+      setIsSavingPayment(false);
     }
   };
 
   const generatePDF = (row: DailyBillRow) => {
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      toast.error('Please allow popups to generate PDF');
-      return;
+    printDailyBillInvoice(row);
+  };
+
+  const handleShareJpg = async (row: DailyBillRow) => {
+    setIsSharingJpg(true);
+    try {
+      const res = await shareDailyBillJpg(row);
+      if (res.success) {
+        if (res.method === 'web_share') {
+          toast.success('Bill image shared successfully!');
+        } else {
+          const phone = row.clientPhone ? row.clientPhone.replace(/[^0-9]/g, '') : '';
+          const waUrl = phone ? `https://wa.me/${phone}` : 'https://wa.me/';
+          toast.success(`Downloaded ${res.fileName}`, {
+            description: 'Attach this JPG in WhatsApp.',
+            action: {
+              label: 'Open WhatsApp',
+              onClick: () => window.open(waUrl, '_blank'),
+            },
+            duration: 8000,
+          });
+        }
+      } else if (res.error && res.error !== 'Share cancelled') {
+        toast.error(`Could not share image: ${res.error}`);
+      }
+    } catch (err: any) {
+      toast.error(`Image generation failed: ${err?.message || err}`);
+    } finally {
+      setIsSharingJpg(false);
     }
-    
-    const html = `
-      <html>
-        <head>
-          <title>${row.billNumber}</title>
-          <style>
-            body { font-family: 'Inter', -apple-system, sans-serif; padding: 40px; color: #111; }
-            .header { display: flex; justify-content: space-between; border-bottom: 2px solid #e5e7eb; padding-bottom: 24px; margin-bottom: 32px; }
-            .company-details h1 { margin: 0; color: #dc2626; font-size: 32px; font-weight: 900; letter-spacing: -0.5px; }
-            .company-details p { margin: 4px 0; color: #4b5563; font-size: 15px; }
-            .bill-details { text-align: right; }
-            .bill-details h2 { margin: 0 0 8px 0; color: #111; font-size: 28px; font-weight: 900; letter-spacing: -0.5px; }
-            .bill-details p { margin: 4px 0; color: #4b5563; font-size: 15px; font-weight: 600; }
-            .client-section { margin-bottom: 32px; background: #f9fafb; padding: 24px; border-radius: 12px; }
-            .client-section h3 { margin: 0 0 12px 0; font-size: 14px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; }
-            .client-section p { margin: 0; font-size: 20px; font-weight: 800; color: #111; }
-            .client-section .region { margin-top: 4px; font-size: 14px; font-weight: 500; color: #4b5563; }
-            .section-title { font-size: 16px; font-weight: 800; color: #111; margin: 0 0 12px 0; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb; }
-            table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
-            th { text-align: left; padding: 10px 14px; border-bottom: 2px solid #e5e7eb; color: #6b7280; font-size: 13px; text-transform: uppercase; font-weight: 700; }
-            td { padding: 10px 14px; border-bottom: 1px solid #f3f4f6; font-size: 15px; font-weight: 500; color: #111; }
-            .text-right { text-align: right; }
-            .subtotal-row td { background: #f9fafb; font-weight: 700; border-bottom: 0; }
-            .section-container { margin-bottom: 32px; }
-            .summary-table { width: 340px; margin-left: auto; border-collapse: collapse; background: #f9fafb; border-radius: 12px; overflow: hidden; }
-            .summary-table td { padding: 12px 16px; font-size: 15px; border: none; font-weight: 500; }
-            .summary-table tr.total td { font-weight: 900; font-size: 20px; background: #fee2e2; color: #991b1b; }
-            .status-badge { display: inline-block; padding: 8px 16px; border-radius: 999px; font-weight: 800; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; }
-            .status-paid { background: #dcfce7; color: #166534; }
-            .status-partial { background: #fef08a; color: #854d0e; }
-            .status-unpaid { background: #fee2e2; color: #991b1b; }
-            .footer { margin-top: 60px; text-align: center; font-size: 13px; color: #9ca3af; border-top: 1px solid #e5e7eb; padding-top: 24px; font-weight: 500; }
-            .div-summary { width: 340px; margin-left: auto; margin-bottom: 12px; border-radius: 12px; overflow: hidden; border: 1px solid #e5e7eb; }
-            .div-summary-header { padding: 10px 16px; font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.5px; }
-            .primary-summary .div-summary-header { background: #eff6ff; color: #1d4ed8; border-bottom: 1px solid #bfdbfe; }
-            .bakery-summary .div-summary-header { background: #fffbeb; color: #b45309; border-bottom: 1px solid #fde68a; }
-            .primary-summary tr.div-outstanding td { font-weight: 900; color: #1d4ed8; background: #eff6ff; border-top: 1px solid #bfdbfe; }
-            .bakery-summary tr.div-outstanding td { font-weight: 900; color: #b45309; background: #fffbeb; border-top: 1px solid #fde68a; }
-            .grand-total-table { margin-top: 8px; }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <div class="company-details">
-              <h1>Daily Fresh</h1>
-              <p>123 Bakery Street, Mangaluru</p>
-              <p>Phone: +91 9876543210</p>
-            </div>
-            <div class="bill-details">
-              <h2>INVOICE</h2>
-              <p>${row.billNumber}</p>
-              <p>Date: ${format(new Date(row.deliveryDate), 'dd MMM yyyy')}</p>
-              </div>
-            </div>
-          </div>
-          
-          <div class="client-section">
-            <h3>Billed To</h3>
-            <p>${row.clientName}</p>
-            <p class="region">Region: ${row.region}</p>
-          </div>
-
-          ${(() => {
-            const primary = row.items.filter(i => i.division === 'primary');
-            const bakery = row.items.filter(i => i.division === 'bakery');
-            let tables = '';
-            
-            const renderSection = (title: string, items: typeof row.items) => {
-              if (items.length === 0) return '';
-              const sub = items.reduce((sum, i) => sum + i.total, 0);
-              return `
-                <div class="section-container">
-                  <h4 class="section-title">${title}</h4>
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Product</th>
-                        <th class="text-right">Qty</th>
-                        <th class="text-right">Price</th>
-                        <th class="text-right">Total</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      ${items.map(item => `
-                        <tr>
-                          <td>${item.productName}</td>
-                          <td class="text-right">${item.qty}</td>
-                          <td class="text-right">₹${item.unitPrice.toFixed(2)}</td>
-                          <td class="text-right">₹${item.total.toFixed(2)}</td>
-                        </tr>
-                      `).join('')}
-                      <tr class="subtotal-row">
-                        <td colspan="3" class="text-right">${title} Subtotal</td>
-                        <td class="text-right">₹${sub.toFixed(2)}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              `;
-            };
-            
-            tables += renderSection('Primary Foods', primary);
-            tables += renderSection('Bakery Foods', bakery);
-            return tables;
-          })()}
-
-          ${(() => {
-            const sections: string[] = [];
-
-            if (row.items.some(i => i.division === 'primary')) {
-              sections.push(`
-                <div class="div-summary primary-summary">
-                  <div class="div-summary-header">Primary Foods</div>
-                  <table class="summary-table">
-                    <tr><td>Bill Subtotal</td><td class="text-right">₹${row.primarySubtotal.toFixed(2)}</td></tr>
-                    ${row.primaryCreditApplied > 0 ? `
-                      <tr style="color:#166534"><td>Previous Credit Applied</td><td class="text-right">-₹${row.primaryCreditApplied.toFixed(2)}</td></tr>
-                      <tr style="font-weight:700"><td>Net Payable</td><td class="text-right">₹${Math.max(0, row.primarySubtotal - row.primaryCreditApplied).toFixed(2)}</td></tr>
-                    ` : ''}
-                    ${row.primaryOldBalance > 0 ? `<tr><td>Previous Balance</td><td class="text-right">₹${row.primaryOldBalance.toFixed(2)}</td></tr>` : ''}
-                    ${row.primaryReceived > 0 ? (row.primaryExcess > 0 ? `
-                      <tr><td>Amount Received</td><td class="text-right">₹${row.primaryReceived.toFixed(2)}</td></tr>
-                      <tr style="color:#166534"><td>Applied to Bill</td><td class="text-right">₹${row.primaryPaid.toFixed(2)}</td></tr>
-                      <tr style="color:#1d4ed8;font-weight:700"><td>Client Credit Created</td><td class="text-right">+₹${row.primaryExcess.toFixed(2)}</td></tr>
-                    ` : `<tr style="color:#166534"><td>Paid Today</td><td class="text-right">₹${row.primaryReceived.toFixed(2)}</td></tr>`) : ''}
-                    <tr class="div-outstanding"><td>Outstanding</td><td class="text-right">₹${Math.max(0, row.primaryOutstanding).toFixed(2)}</td></tr>
-                  </table>
-                </div>
-              `);
-            }
-
-            if (row.items.some(i => i.division === 'bakery')) {
-              sections.push(`
-                <div class="div-summary bakery-summary">
-                  <div class="div-summary-header">Bakery Foods</div>
-                  <table class="summary-table">
-                    <tr><td>Bill Subtotal</td><td class="text-right">₹${row.bakerySubtotal.toFixed(2)}</td></tr>
-                    ${row.bakeryCreditApplied > 0 ? `
-                      <tr style="color:#166534"><td>Previous Credit Applied</td><td class="text-right">-₹${row.bakeryCreditApplied.toFixed(2)}</td></tr>
-                      <tr style="font-weight:700"><td>Net Payable</td><td class="text-right">₹${Math.max(0, row.bakerySubtotal - row.bakeryCreditApplied).toFixed(2)}</td></tr>
-                    ` : ''}
-                    ${row.bakeryOldBalance > 0 ? `<tr><td>Previous Balance</td><td class="text-right">₹${row.bakeryOldBalance.toFixed(2)}</td></tr>` : ''}
-                    ${row.bakeryReceived > 0 ? (row.bakeryExcess > 0 ? `
-                      <tr><td>Amount Received</td><td class="text-right">₹${row.bakeryReceived.toFixed(2)}</td></tr>
-                      <tr style="color:#166534"><td>Applied to Bill</td><td class="text-right">₹${row.bakeryPaid.toFixed(2)}</td></tr>
-                      <tr style="color:#b45309;font-weight:700"><td>Client Credit Created</td><td class="text-right">+₹${row.bakeryExcess.toFixed(2)}</td></tr>
-                    ` : `<tr style="color:#166534"><td>Paid Today</td><td class="text-right">₹${row.bakeryReceived.toFixed(2)}</td></tr>`) : ''}
-                    <tr class="div-outstanding"><td>Outstanding</td><td class="text-right">₹${Math.max(0, row.bakeryOutstanding).toFixed(2)}</td></tr>
-                  </table>
-                </div>
-              `);
-            }
-
-            return sections.join('');
-          })()}
-
-          <table class="summary-table grand-total-table">
-            <tr class="total">
-              <td>${activeDivision !== 'all' ? (activeDivision === 'primary' ? 'Primary' : 'Bakery') : 'Grand'} Outstanding</td>
-              <td class="text-right">₹${Math.max(0, row.outstandingBalance).toFixed(2)}</td>
-            </tr>
-          </table>
-
-          <div class="footer">
-            <p>Thank you for your business!</p>
-            <p>This is a computer generated invoice.</p>
-          </div>
-          
-          <script>
-            window.onload = function() {
-              window.print();
-            }
-          </script>
-        </body>
-      </html>
-    `;
-    printWindow.document.write(html);
-    printWindow.document.close();
   };
 
   return (
@@ -608,6 +652,13 @@ export default function DailyBillingPage() {
                   <Eye className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> View
                 </button>
                 <button
+                  onClick={() => handleShareJpg(row)}
+                  className="flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 sm:py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-full font-bold text-xs sm:text-sm transition-colors shadow-sm border-2 border-transparent whitespace-nowrap"
+                  title="Share as Image (JPG)"
+                >
+                  <Share2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Share JPG
+                </button>
+                <button
                   onClick={() => generatePDF(row)}
                   className="flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 sm:py-2.5 bg-[var(--color-primary)] hover:bg-[var(--color-primary)]/90 text-white rounded-full font-bold text-xs sm:text-sm transition-colors shadow-sm border-2 border-transparent whitespace-nowrap"
                 >
@@ -633,10 +684,13 @@ export default function DailyBillingPage() {
             <div className="p-8 overflow-y-auto custom-scrollbar flex-1">
               {/* Header */}
               <div className="flex flex-col sm:flex-row justify-between items-start gap-6 border-b border-gray-200 dark:border-gray-800 pb-8 mb-8">
-                <div>
-                  <h1 className="text-3xl font-black text-red-600 dark:text-red-500 mb-1 tracking-tight">Daily Fresh</h1>
-                  <p className="text-sm font-medium text-[var(--color-text-muted)]">123 Bakery Street, Mangaluru</p>
-                  <p className="text-sm font-medium text-[var(--color-text-muted)]">Phone: +91 9876543210</p>
+                <div className="flex items-start gap-3">
+                  <img src="/logo.png" alt="Daily Fresh" className="w-12 h-12 object-contain rounded-xl border border-gray-100 dark:border-gray-800" onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }} />
+                  <div>
+                    <h1 className="text-2xl font-black text-red-600 dark:text-red-500 mb-0.5 tracking-tight">Daily Fresh Food Products</h1>
+                    <p className="text-xs font-semibold text-[var(--color-text-muted)]">Posoat, Manjeswar, Kasargode – 671323</p>
+                    <p className="text-xs font-bold text-red-600 dark:text-red-400 mt-0.5">Phone: 9072265888, 7907092583</p>
+                  </div>
                 </div>
                 <div className="text-right">
                   <h2 className="text-2xl font-black text-[var(--color-text-main)] mb-1 tracking-tight">INVOICE</h2>
@@ -676,8 +730,7 @@ export default function DailyBillingPage() {
                             <tr className="bg-gray-50 dark:bg-gray-800/50">
                               <th className="py-4 px-6 text-xs font-black text-[var(--color-text-muted)] uppercase tracking-widest border-b border-gray-200 dark:border-gray-800">Product</th>
                               <th className="py-4 px-6 text-xs font-black text-[var(--color-text-muted)] uppercase tracking-widest border-b border-gray-200 dark:border-gray-800 text-right">Qty</th>
-                              <th className="py-4 px-6 text-xs font-black text-[var(--color-text-muted)] uppercase tracking-widest border-b border-gray-200 dark:border-gray-800 text-right">Unit Price</th>
-                              <th className="py-4 px-6 text-xs font-black text-[var(--color-text-muted)] uppercase tracking-widest border-b border-gray-200 dark:border-gray-800 text-right">Total</th>
+                              <th className="py-4 px-6 text-xs font-black text-[var(--color-text-muted)] uppercase tracking-widest border-b border-gray-200 dark:border-gray-800 text-right">Amount</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -685,12 +738,11 @@ export default function DailyBillingPage() {
                               <tr key={idx} className="border-b border-gray-100 dark:border-white/[0.05] last:border-0">
                                 <td className="py-4 px-6 text-sm font-bold text-[var(--color-text-main)]">{item.productName}</td>
                                 <td className="py-4 px-6 text-sm font-bold text-[var(--color-text-main)] text-right">{item.qty}</td>
-                                <td className="py-4 px-6 text-sm font-bold text-[var(--color-text-muted)] text-right">{formatCurrency(item.unitPrice)}</td>
                                 <td className="py-4 px-6 text-sm font-bold text-[var(--color-text-main)] text-right">{formatCurrency(item.total)}</td>
                               </tr>
                             ))}
                             <tr className="bg-gray-50 dark:bg-gray-800/20">
-                              <td colSpan={3} className="py-4 px-6 text-sm font-black text-[var(--color-text-main)] text-right">{title} Subtotal</td>
+                              <td colSpan={2} className="py-4 px-6 text-sm font-black text-[var(--color-text-main)] text-right">{title} Subtotal</td>
                               <td className="py-4 px-6 text-sm font-black text-[var(--color-text-main)] text-right">{formatCurrency(sub)}</td>
                             </tr>
                           </tbody>
@@ -742,27 +794,34 @@ export default function DailyBillingPage() {
                           </div>
                         )}
                         {viewBillRow.primaryReceived > 0 && (
-                          viewBillRow.primaryExcess > 0 ? (
-                            <>
-                              <div className="flex justify-between text-sm">
-                                <span className="font-semibold text-[var(--color-text-muted)]">Amount Received</span>
-                                <span className="font-bold text-[var(--color-text-main)]">{formatCurrency(viewBillRow.primaryReceived)}</span>
+                          <>
+                            <div className="flex justify-between text-sm">
+                              <span className="font-semibold text-[var(--color-text-muted)]">Payment Received</span>
+                              <span className="font-bold text-[var(--color-text-main)]">{formatCurrency(viewBillRow.primaryReceived)}</span>
+                            </div>
+                            <div className="flex justify-between text-sm pl-2">
+                              <span className="font-semibold text-green-600 dark:text-green-400">↳ Applied to Today&apos;s Bill</span>
+                              <span className="font-bold text-green-600 dark:text-green-400">{formatCurrency(viewBillRow.primaryAppliedToBill)}</span>
+                            </div>
+                            {viewBillRow.primaryAppliedToPrevious > 0 && (
+                              <div className="flex justify-between text-sm pl-2">
+                                <span className="font-semibold text-emerald-600 dark:text-emerald-400">↳ Applied to Previous Balance</span>
+                                <span className="font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(viewBillRow.primaryAppliedToPrevious)}</span>
                               </div>
-                              <div className="flex justify-between text-sm">
-                                <span className="font-semibold text-green-600 dark:text-green-400">Applied to Bill</span>
-                                <span className="font-bold text-green-600 dark:text-green-400">{formatCurrency(viewBillRow.primaryPaid)}</span>
-                              </div>
-                              <div className="flex justify-between text-sm">
-                                <span className="font-bold text-blue-600 dark:text-blue-400">Client Credit Created</span>
+                            )}
+                            {viewBillRow.primaryExcess > 0 && (
+                              <div className="flex justify-between text-sm pl-2">
+                                <span className="font-bold text-blue-600 dark:text-blue-400">↳ Advance Credit Created</span>
                                 <span className="font-bold text-blue-600 dark:text-blue-400">+{formatCurrency(viewBillRow.primaryExcess)}</span>
                               </div>
-                            </>
-                          ) : (
-                            <div className="flex justify-between text-sm">
-                              <span className="font-semibold text-green-600 dark:text-green-400">Paid Today</span>
-                              <span className="font-bold text-green-600 dark:text-green-400">{formatCurrency(viewBillRow.primaryReceived)}</span>
-                            </div>
-                          )
+                            )}
+                          </>
+                        )}
+                        {viewBillRow.primaryOldBalance > 0 && viewBillRow.primaryAppliedToPrevious > 0 && (
+                          <div className="flex justify-between text-sm">
+                            <span className="font-semibold text-[var(--color-text-muted)]">Remaining Previous Balance</span>
+                            <span className="font-bold text-[var(--color-text-main)]">{formatCurrency(viewBillRow.primaryPreviousRemaining)}</span>
+                          </div>
                         )}
                         <div className="flex justify-between text-sm pt-1 border-t border-blue-100 dark:border-blue-900/30">
                           <span className="font-black text-blue-700 dark:text-blue-400 uppercase text-xs tracking-wider">Outstanding</span>
@@ -802,27 +861,34 @@ export default function DailyBillingPage() {
                           </div>
                         )}
                         {viewBillRow.bakeryReceived > 0 && (
-                          viewBillRow.bakeryExcess > 0 ? (
-                            <>
-                              <div className="flex justify-between text-sm">
-                                <span className="font-semibold text-[var(--color-text-muted)]">Amount Received</span>
-                                <span className="font-bold text-[var(--color-text-main)]">{formatCurrency(viewBillRow.bakeryReceived)}</span>
+                          <>
+                            <div className="flex justify-between text-sm">
+                              <span className="font-semibold text-[var(--color-text-muted)]">Payment Received</span>
+                              <span className="font-bold text-[var(--color-text-main)]">{formatCurrency(viewBillRow.bakeryReceived)}</span>
+                            </div>
+                            <div className="flex justify-between text-sm pl-2">
+                              <span className="font-semibold text-green-600 dark:text-green-400">↳ Applied to Today&apos;s Bill</span>
+                              <span className="font-bold text-green-600 dark:text-green-400">{formatCurrency(viewBillRow.bakeryAppliedToBill)}</span>
+                            </div>
+                            {viewBillRow.bakeryAppliedToPrevious > 0 && (
+                              <div className="flex justify-between text-sm pl-2">
+                                <span className="font-semibold text-amber-600 dark:text-amber-400">↳ Applied to Previous Balance</span>
+                                <span className="font-bold text-amber-600 dark:text-amber-400">{formatCurrency(viewBillRow.bakeryAppliedToPrevious)}</span>
                               </div>
-                              <div className="flex justify-between text-sm">
-                                <span className="font-semibold text-green-600 dark:text-green-400">Applied to Bill</span>
-                                <span className="font-bold text-green-600 dark:text-green-400">{formatCurrency(viewBillRow.bakeryPaid)}</span>
-                              </div>
-                              <div className="flex justify-between text-sm">
-                                <span className="font-bold text-amber-600 dark:text-amber-400">Client Credit Created</span>
+                            )}
+                            {viewBillRow.bakeryExcess > 0 && (
+                              <div className="flex justify-between text-sm pl-2">
+                                <span className="font-bold text-amber-600 dark:text-amber-400">↳ Advance Credit Created</span>
                                 <span className="font-bold text-amber-600 dark:text-amber-400">+{formatCurrency(viewBillRow.bakeryExcess)}</span>
                               </div>
-                            </>
-                          ) : (
-                            <div className="flex justify-between text-sm">
-                              <span className="font-semibold text-green-600 dark:text-green-400">Paid Today</span>
-                              <span className="font-bold text-green-600 dark:text-green-400">{formatCurrency(viewBillRow.bakeryReceived)}</span>
-                            </div>
-                          )
+                            )}
+                          </>
+                        )}
+                        {viewBillRow.bakeryOldBalance > 0 && viewBillRow.bakeryAppliedToPrevious > 0 && (
+                          <div className="flex justify-between text-sm">
+                            <span className="font-semibold text-[var(--color-text-muted)]">Remaining Previous Balance</span>
+                            <span className="font-bold text-[var(--color-text-main)]">{formatCurrency(viewBillRow.bakeryPreviousRemaining)}</span>
+                          </div>
                         )}
                         <div className="flex justify-between text-sm pt-1 border-t border-amber-100 dark:border-amber-900/30">
                           <span className="font-black text-amber-700 dark:text-amber-400 uppercase text-xs tracking-wider">Outstanding</span>
@@ -842,8 +908,16 @@ export default function DailyBillingPage() {
               </div>
             </div>
             
-            <div className="p-6 border-t border-gray-100 dark:border-white/[0.05] bg-gray-50/50 dark:bg-gray-900/50 flex justify-end gap-3">
+            <div className="p-6 border-t border-gray-100 dark:border-white/[0.05] bg-gray-50/50 dark:bg-gray-900/50 flex flex-wrap justify-end gap-3">
               <Button variant="outline" onClick={() => setViewBillRow(null)}>Close</Button>
+              <Button
+                variant="secondary"
+                icon={<Share2 className="w-4 h-4" />}
+                onClick={() => handleShareJpg(viewBillRow)}
+                loading={isSharingJpg}
+              >
+                Share as Image (JPG)
+              </Button>
               <Button icon={<Download className="w-4 h-4" />} onClick={() => generatePDF(viewBillRow)}>Download PDF</Button>
             </div>
           </div>
@@ -895,8 +969,32 @@ export default function DailyBillingPage() {
           const ds  = divPaymentState[div];
           const entered = parseFloat(ds.amount) || 0;
           const isDirect = paymentModalRow.clientId === 'direct';
-          const remaining = Math.max(0, cfg.outstanding - entered);
-          const excessCredit = !isDirect && entered > cfg.outstanding ? (entered - cfg.outstanding) : 0;
+          const orderRemaining = div === 'primary'
+            ? (paymentModalRow.primaryBillRemaining !== undefined ? paymentModalRow.primaryBillRemaining : paymentModalRow.primarySubtotal)
+            : (paymentModalRow.bakeryBillRemaining !== undefined ? paymentModalRow.bakeryBillRemaining : paymentModalRow.bakerySubtotal);
+
+          const otherDiv = div === 'primary' ? 'bakery' : 'primary';
+          const otherOrderRemaining = div === 'primary'
+            ? (paymentModalRow.bakeryBillRemaining !== undefined ? paymentModalRow.bakeryBillRemaining : paymentModalRow.bakerySubtotal)
+            : (paymentModalRow.primaryBillRemaining !== undefined ? paymentModalRow.primaryBillRemaining : paymentModalRow.primarySubtotal);
+          const otherDivOutstanding = div === 'primary' ? paymentModalRow.bakeryOutstanding : paymentModalRow.primaryOutstanding;
+          const billDivisionPrior = div === 'primary' ? paymentModalRow.primaryPreviousRemaining : paymentModalRow.bakeryPreviousRemaining;
+          const otherDivisionPrior = div === 'primary' ? paymentModalRow.bakeryPreviousRemaining : paymentModalRow.primaryPreviousRemaining;
+
+          const alloc = allocatePayment({
+            paymentAmount: entered,
+            orderRemaining,
+            otherOrderRemaining,
+            billDivisionPrior,
+            otherDivisionPrior,
+            billDivisionOutstanding: cfg.outstanding,
+            otherDivisionOutstanding: otherDivOutstanding,
+            clientTotalOutstanding: cfg.outstanding + otherDivOutstanding,
+            isDirectSale: isDirect,
+            division: div,
+          });
+
+          const remaining = alloc.remainingTotalOutstanding;
           const overLimit = isDirect && entered > cfg.outstanding + 0.01;
 
           return (
@@ -930,10 +1028,36 @@ export default function DailyBillingPage() {
                   autoFocus={div === activePaymentDiv}
                 />
                 {overLimit && <p className="text-[11px] font-semibold text-red-500 mt-1">Exceeds direct sale total of {formatCurrency(cfg.outstanding)}</p>}
-                {excessCredit > 0 && (
-                  <div className="mt-1.5 p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-[11px] text-emerald-800 dark:text-emerald-300 font-semibold flex items-center justify-between">
-                    <span>Advance credit created:</span>
-                    <span className="font-bold">+{formatCurrency(excessCredit)}</span>
+                {entered > 0 && !overLimit && !isDirect && (
+                  <div className="mt-2 p-2.5 rounded-xl bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-800 text-[11px] space-y-1">
+                    <div className="flex justify-between text-gray-600 dark:text-gray-300">
+                      <span>Applied to {div === 'primary' ? 'Primary' : 'Bakery'} Bill:</span>
+                      <span className="font-bold text-gray-900 dark:text-white">{formatCurrency(alloc.appliedToBill)}</span>
+                    </div>
+                    {alloc.appliedToOtherBill > 0 && (
+                      <div className="flex justify-between text-emerald-600 dark:text-emerald-400">
+                        <span>Applied to {otherDiv === 'primary' ? 'Primary' : 'Bakery'} Bill:</span>
+                        <span className="font-bold">{formatCurrency(alloc.appliedToOtherBill)}</span>
+                      </div>
+                    )}
+                    {alloc.appliedToSameDivisionPrevious > 0 && (
+                      <div className="flex justify-between text-emerald-600 dark:text-emerald-400">
+                        <span>Applied to {div === 'primary' ? 'Primary' : 'Bakery'} Balance:</span>
+                        <span className="font-bold">{formatCurrency(alloc.appliedToSameDivisionPrevious)}</span>
+                      </div>
+                    )}
+                    {alloc.appliedToOtherDivisionPrevious > 0 && (
+                      <div className="flex justify-between text-emerald-600 dark:text-emerald-400">
+                        <span>Applied to {otherDiv === 'primary' ? 'Primary Foods' : 'Bakery Foods'} Balance:</span>
+                        <span className="font-bold">{formatCurrency(alloc.appliedToOtherDivisionPrevious)}</span>
+                      </div>
+                    )}
+                    {alloc.excessCredit > 0 && (
+                      <div className="flex justify-between text-blue-600 dark:text-blue-400 font-bold">
+                        <span>Advance Credit Created:</span>
+                        <span>+{formatCurrency(alloc.excessCredit)}</span>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -941,7 +1065,7 @@ export default function DailyBillingPage() {
               {/* Method */}
               <div>
                 <label className="block text-xs font-semibold text-[var(--color-text-main)] mb-1">Method</label>
-                <div className="grid grid-cols-4 gap-1.5">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                   {(['cash', 'upi', 'bank_transfer', 'card'] as PaymentMethod[]).map(m => (
                     <button
                       key={m}
@@ -987,16 +1111,18 @@ export default function DailyBillingPage() {
               {/* Scrollable body */}
               <div className="overflow-y-auto flex-1 px-5 py-4 space-y-3">
 
-                {/* Date (shared across divisions) */}
-                <div>
-                  <label className="block text-xs font-semibold text-[var(--color-text-main)] mb-1">Payment Date</label>
-                  <input
-                    type="date"
-                    value={paymentDate}
-                    onChange={e => setPaymentDate(e.target.value)}
-                    className={inputClass}
-                  />
-                </div>
+                {/* Date (shared across divisions) - Admin only */}
+                {!isStaff && (
+                  <div>
+                    <label className="block text-xs font-semibold text-[var(--color-text-main)] mb-1">Payment Date</label>
+                    <input
+                      type="date"
+                      value={paymentDate}
+                      onChange={e => setPaymentDate(e.target.value)}
+                      className={inputClass}
+                    />
+                  </div>
+                )}
 
                 {/* Division tabs (only when both are visible) */}
                 {showTabs && (
@@ -1058,7 +1184,13 @@ export default function DailyBillingPage() {
 
               {/* Footer */}
               <div className="px-5 py-3 border-t border-gray-100 dark:border-white/[0.05] bg-gray-50/50 dark:bg-gray-900/50 shrink-0">
-                <Button size="md" className="w-full h-10 text-sm shadow-lg" onClick={handleSavePartialPayment}>
+                <Button
+                  size="md"
+                  className="w-full h-10 text-sm shadow-lg"
+                  onClick={handleSavePartialPayment}
+                  disabled={isSavingPayment}
+                  loading={isSavingPayment}
+                >
                   Confirm Payment{totalPayment > 0 ? ` — ${formatCurrency(totalPayment)}` : ''}
                 </Button>
               </div>

@@ -1,21 +1,33 @@
 import React, { useState } from 'react';
 import {
   Copy, Share2, Check, Smartphone, Monitor, Laptop,
-  Download, CheckCircle2, ShieldCheck, MessageCircle, ExternalLink,
-  Globe, Info
+  Download, CheckCircle2, ShieldCheck, MessageCircle,
+  Globe, RefreshCw
 } from 'lucide-react';
 import { Button } from '../../components/ui';
 import { usePwaInstall } from '../../hooks/usePwaInstall';
+import {
+  OFFICIAL_DISTRIBUTION,
+  getRuntimeEnvironment,
+  isInstalledAppRuntime,
+} from '../../config/distribution';
+import { triggerAppUpdateCheck } from '../../services/appUpdateService';
+import InstallInstructionsModal from '../../components/pwa/InstallInstructionsModal';
 import { toast } from 'sonner';
 
-const CANONICAL_URL = 'https://daily-fresh-erp.vercel.app';
+const CANONICAL_URL = typeof window !== 'undefined' && window.location.origin
+  ? window.location.origin
+  : 'https://daily-fresh-billing-system.web.app';
 
 export default function AppInstallationSection() {
   const {
     isStandalone,
     isInstalled,
     hasNativePrompt,
+    isInAppBrowser,
     platform,
+    showInstructions,
+    setShowInstructions,
     triggerInstall,
   } = usePwaInstall();
 
@@ -78,8 +90,8 @@ export default function AppInstallationSection() {
           <h3 className="text-lg font-bold text-[var(--color-text-main)]">
             App Installation &amp; Sharing
           </h3>
-          <span className="text-[11px] px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-900/40 text-[var(--color-primary)] font-semibold uppercase tracking-wider">
-            Admin Only
+          <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 font-semibold uppercase tracking-wider">
+            All Users
           </span>
         </div>
         <p className="text-sm font-medium text-[var(--color-text-muted)]">
@@ -88,47 +100,230 @@ export default function AppInstallationSection() {
       </div>
 
       {/* Current Device Installation Status */}
-      <div className="p-5 rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50/60 dark:bg-gray-800/20">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-              isStandalone
-                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400'
-                : isInstalled
-                ? 'bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-400'
-                : 'bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-400'
-            }`}>
-              {isStandalone ? (
-                <CheckCircle2 className="w-5 h-5" />
-              ) : (
-                <Download className="w-5 h-5" />
-              )}
+      {(() => {
+        const runtime = getRuntimeEnvironment();
+        const isInstalledApp = isInstalledAppRuntime() || isStandalone || isInstalled;
+        const runtimeTitle =
+          runtime === 'electron' ? 'Daily Fresh Windows Desktop App' :
+          runtime === 'capacitor' ? 'Daily Fresh Android Native App' :
+          isStandalone ? 'Installed Standalone Web App' :
+          'Web Browser Mode';
+
+        const runtimeSubtitle =
+          runtime === 'electron' ? `Running as native 64-bit desktop application (v${OFFICIAL_DISTRIBUTION.version})` :
+          runtime === 'capacitor' ? `Running as native Android application (v${OFFICIAL_DISTRIBUTION.version})` :
+          isStandalone ? 'Running in standalone home-screen app mode' :
+          'Not yet installed on this device (running inside browser)';
+
+        return (
+          <div className="p-5 rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50/60 dark:bg-gray-800/20">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                  isInstalledApp
+                    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400'
+                    : 'bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-400'
+                }`}>
+                  {isInstalledApp ? (
+                    <CheckCircle2 className="w-5 h-5" />
+                  ) : (
+                    <Download className="w-5 h-5" />
+                  )}
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+                    This Device Status ({platform === 'ios' ? 'iOS' : platform === 'android' ? 'Android' : platform === 'windows' ? 'Windows' : platform === 'macos' ? 'macOS' : 'Browser'})
+                  </p>
+                  <p className="text-sm font-bold text-[var(--color-text-main)] mt-0.5">
+                    {runtimeTitle}
+                  </p>
+                  <p className="text-xs text-[var(--color-text-muted)]">
+                    {runtimeSubtitle}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => triggerAppUpdateCheck()}
+                  icon={<RefreshCw className="w-4 h-4 text-gray-500 dark:text-gray-400" />}
+                >
+                  Check for Updates
+                </Button>
+
+                {!isInstalledApp && (
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="sm"
+                    onClick={() => triggerInstall()}
+                    icon={<Download className="w-4 h-4" />}
+                  >
+                    {platform === 'windows' ? 'Download Windows Setup' : platform === 'android' ? 'Download Android APK' : 'Install App'}
+                  </Button>
+                )}
+              </div>
             </div>
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-                This Device Status ({platform === 'ios' ? 'iOS' : platform === 'android' ? 'Android' : platform === 'windows' ? 'Windows' : platform === 'macos' ? 'macOS' : 'Browser'})
-              </p>
-              <p className="text-sm font-bold text-[var(--color-text-main)] mt-0.5">
-                {isStandalone
-                  ? 'Running in Standalone App Mode'
-                  : isInstalled
-                  ? 'App is Installed on this Device'
-                  : 'Web Browser Mode (Not yet installed as PWA)'}
-              </p>
+          </div>
+        );
+      })()}
+
+      {/* Official Distributable Packages Section */}
+      <div className="space-y-4">
+        <div>
+          <h4 className="text-sm font-bold text-[var(--color-text-main)]">
+            Official Production Download Packages
+          </h4>
+          <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
+            Verified release artifacts with SHA-256 integrity checksums for Windows administration and Android staff phones.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Windows Desktop Setup */}
+          <div className="p-5 rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-2xs space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 border border-blue-100 dark:border-blue-900/40">
+                  <Monitor className="w-5 h-5" />
+                </div>
+                <div>
+                  <h5 className="text-sm font-bold text-[var(--color-text-main)]">
+                    Windows Desktop Installer
+                  </h5>
+                  <p className="text-xs text-[var(--color-text-muted)]">
+                    {OFFICIAL_DISTRIBUTION.downloads.windows.fileName} • {OFFICIAL_DISTRIBUTION.downloads.windows.fileSize}
+                  </p>
+                </div>
+              </div>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-semibold uppercase tracking-wider">
+                Admin PCs
+              </span>
+            </div>
+
+            <div className="space-y-2 text-xs text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/40 p-3 rounded-xl border border-gray-100 dark:border-gray-800">
+              <div className="flex justify-between items-center text-[11px]">
+                <span className="text-gray-500">Target OS:</span>
+                <span className="font-semibold text-gray-800 dark:text-gray-200">Windows 10 / 11 (64-bit)</span>
+              </div>
+              <div className="flex justify-between items-center text-[11px]">
+                <span className="text-gray-500">Version:</span>
+                <span className="font-mono font-semibold text-gray-800 dark:text-gray-200">v{OFFICIAL_DISTRIBUTION.version}</span>
+              </div>
+              <div className="flex flex-col gap-0.5 pt-1 border-t border-gray-200/50 dark:border-gray-700/50 text-[10px]">
+                <span className="text-gray-500 font-mono">SHA-256 Checksum:</span>
+                <span className="font-mono text-[9px] text-gray-700 dark:text-gray-300 select-all break-all">
+                  {OFFICIAL_DISTRIBUTION.downloads.windows.sha256}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <a
+                href={OFFICIAL_DISTRIBUTION.downloads.windows.latestUrl}
+                download={OFFICIAL_DISTRIBUTION.downloads.windows.fileName}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => {
+                  toast.info('Downloading DailyFresh-Setup.exe', {
+                    description: 'Run the installer once downloaded to install Daily Fresh ERP on your PC. (Note: Downloading is not installing).',
+                    duration: 8000,
+                  });
+                }}
+                className="flex-1 py-2 px-3 rounded-xl text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 shadow-sm flex items-center justify-center gap-1.5 transition-all text-center"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download Setup.exe</span>
+              </a>
+
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  await navigator.clipboard.writeText(OFFICIAL_DISTRIBUTION.downloads.windows.latestUrl);
+                  toast.success('Windows installer URL copied to clipboard');
+                }}
+                icon={<Copy className="w-3.5 h-3.5" />}
+              >
+                Copy Link
+              </Button>
             </div>
           </div>
 
-          {!isStandalone && !isInstalled && hasNativePrompt && (
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              onClick={() => triggerInstall()}
-              icon={<Download className="w-4 h-4" />}
-            >
-              Install on This Device
-            </Button>
-          )}
+          {/* Android Release APK */}
+          <div className="p-5 rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-2xs space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-100 dark:border-emerald-900/40">
+                  <Smartphone className="w-5 h-5" />
+                </div>
+                <div>
+                  <h5 className="text-sm font-bold text-[var(--color-text-main)]">
+                    Android Signed Release APK
+                  </h5>
+                  <p className="text-xs text-[var(--color-text-muted)]">
+                    {OFFICIAL_DISTRIBUTION.downloads.android.fileName} • {OFFICIAL_DISTRIBUTION.downloads.android.fileSize}
+                  </p>
+                </div>
+              </div>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-semibold uppercase tracking-wider">
+                Staff Phones
+              </span>
+            </div>
+
+            <div className="space-y-2 text-xs text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/40 p-3 rounded-xl border border-gray-100 dark:border-gray-800">
+              <div className="flex justify-between items-center text-[11px]">
+                <span className="text-gray-500">Signing Scheme:</span>
+                <span className="font-semibold text-emerald-600 dark:text-emerald-400">Signed (v2 Scheme Verified)</span>
+              </div>
+              <div className="flex justify-between items-center text-[11px]">
+                <span className="text-gray-500">Version:</span>
+                <span className="font-mono font-semibold text-gray-800 dark:text-gray-200">v{OFFICIAL_DISTRIBUTION.version}</span>
+              </div>
+              <div className="flex flex-col gap-0.5 pt-1 border-t border-gray-200/50 dark:border-gray-700/50 text-[10px]">
+                <span className="text-gray-500 font-mono">SHA-256 Checksum:</span>
+                <span className="font-mono text-[9px] text-gray-700 dark:text-gray-300 select-all break-all">
+                  {OFFICIAL_DISTRIBUTION.downloads.android.sha256}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <a
+                href={OFFICIAL_DISTRIBUTION.downloads.android.latestUrl}
+                download={OFFICIAL_DISTRIBUTION.downloads.android.fileName}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => {
+                  toast.info('Downloading DailyFresh.apk', {
+                    description: 'Tap Open on the downloaded file in your notification bar to complete installation. (Note: Downloading is not installing).',
+                    duration: 8000,
+                  });
+                }}
+                className="flex-1 py-2 px-3 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 shadow-sm flex items-center justify-center gap-1.5 transition-all text-center"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download DailyFresh.apk</span>
+              </a>
+
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  await navigator.clipboard.writeText(OFFICIAL_DISTRIBUTION.downloads.android.latestUrl);
+                  toast.success('Android APK URL copied to clipboard');
+                }}
+                icon={<Copy className="w-3.5 h-3.5" />}
+              >
+                Copy Link
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -270,6 +465,15 @@ export default function AppInstallationSection() {
                 <span className="text-[11px] text-gray-400">(Chrome, Edge, Samsung Internet)</span>
               </div>
               <ol className="space-y-2.5 text-xs text-[var(--color-text-main)]">
+                <li className="flex items-start gap-3 p-3 rounded-xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200/60 dark:border-amber-900/40">
+                  <span className="w-5 h-5 rounded-full bg-amber-200/80 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200 font-bold flex items-center justify-center shrink-0 text-[11px]">
+                    !
+                  </span>
+                  <div>
+                    <strong className="block text-amber-950 dark:text-amber-100">Opened from WhatsApp or Social Media?</strong>
+                    <span className="text-amber-800 dark:text-amber-300 text-[11px]">In-app browsers block app installation. Tap the 3 vertical dots (⋮) in the corner and tap <strong>&ldquo;Open in Chrome&rdquo;</strong> first.</span>
+                  </div>
+                </li>
                 <li className="flex items-start gap-3 p-3 rounded-xl bg-gray-50 dark:bg-gray-800/40">
                   <span className="w-5 h-5 rounded-full bg-red-100 dark:bg-red-900/40 text-[var(--color-primary)] font-bold flex items-center justify-center shrink-0 text-[11px]">
                     1
@@ -435,6 +639,16 @@ export default function AppInstallationSection() {
           </p>
         </div>
       </div>
+
+      {/* Fallback Instructions Modal */}
+      <InstallInstructionsModal
+        isOpen={showInstructions}
+        onClose={() => setShowInstructions(false)}
+        detectedPlatform={platform}
+        hasNativePrompt={hasNativePrompt}
+        isInAppBrowser={isInAppBrowser}
+        onTriggerNativePrompt={triggerInstall}
+      />
     </div>
   );
 }

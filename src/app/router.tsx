@@ -14,8 +14,7 @@ function RootRedirect() {
     return <div className="h-screen w-full flex items-center justify-center bg-[var(--color-bg)]">Loading...</div>;
   }
   if (!user) return <Navigate to="/login" replace />;
-  if (user.role === 'admin') return <Navigate to="/dashboard" replace />;
-  return <Navigate to="/payments" replace />;
+  return <Navigate to="/dashboard" replace />;
 }
 
 // Lazy-loaded pages with controlled chunk error retry and recovery
@@ -24,6 +23,7 @@ const ClientsPage = safeLazy(() => import('../features/clients/ClientsPage'), 'C
 const AddClientPage = safeLazy(() => import('../features/clients/AddClientPage'), 'AddClientPage');
 const EditClientPage = safeLazy(() => import('../features/clients/EditClientPage'), 'EditClientPage');
 const ClientDetailPage = safeLazy(() => import('../features/clients/ClientDetailPage'), 'ClientDetailPage');
+const CustomerCreditReconciliationPage = safeLazy(() => import('../features/clients/CustomerCreditReconciliationPage'), 'CustomerCreditReconciliationPage');
 const ProductsPage = safeLazy(() => import('../features/products/ProductsPage'), 'ProductsPage');
 const ProductFormPage = safeLazy(() => import('../features/products/ProductFormPage'), 'ProductFormPage');
 const OrdersPage = safeLazy(() => import('../features/orders/OrdersPage'), 'OrdersPage');
@@ -36,6 +36,8 @@ const SettingsPage = safeLazy(() => import('../features/settings/SettingsPage'),
 const TrashPage = safeLazy(() => import('../features/settings/TrashPage'), 'TrashPage');
 const PaymentsCollectionPage = safeLazy(() => import('../features/payments/PaymentsCollectionPage'), 'PaymentsCollectionPage');
 const StaffPage = safeLazy(() => import('../features/staff/StaffPage'), 'StaffPage');
+const ExpensesPage = safeLazy(() => import('../features/expenses/ExpensesPage'), 'ExpensesPage');
+const AdminNamesManagerPage = safeLazy(() => import('../features/expenses/AdminNamesManagerPage'), 'AdminNamesManagerPage');
 
 function PageLoader() {
   return (
@@ -71,6 +73,7 @@ const router = createBrowserRouter([
         { path: '/clients', element: <SuspenseWrapper><ClientsPage /></SuspenseWrapper> },
         { path: '/clients/new', element: <RequireAdmin><SuspenseWrapper><AddClientPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/clients/:clientId/edit', element: <RequireAdmin><SuspenseWrapper><EditClientPage /></SuspenseWrapper></RequireAdmin> },
+        { path: '/clients/:clientId/credit-reconciliation', element: <RequireAdmin><SuspenseWrapper><CustomerCreditReconciliationPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/clients/:clientId', element: <SuspenseWrapper><ClientDetailPage /></SuspenseWrapper> },
         { path: '/products', element: <RequireAdmin><SuspenseWrapper><ProductsPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/products/new', element: <RequireAdmin><SuspenseWrapper><ProductFormPage /></SuspenseWrapper></RequireAdmin> },
@@ -84,9 +87,11 @@ const router = createBrowserRouter([
         { path: '/payments', element: <SuspenseWrapper><PaymentsCollectionPage /></SuspenseWrapper> },
         { path: '/staff', element: <RequireAdmin><SuspenseWrapper><StaffPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/billing', element: <SuspenseWrapper><DailyBillingPage /></SuspenseWrapper> },
+        { path: '/expenses', element: <SuspenseWrapper><ExpensesPage /></SuspenseWrapper> },
         { path: '/ledger', element: <SuspenseWrapper><ClientLedgerPage /></SuspenseWrapper> },
         { path: '/reports', element: <RequireAdmin><SuspenseWrapper><ReportsPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/settings', element: <RequireAdmin><SuspenseWrapper><SettingsPage /></SuspenseWrapper></RequireAdmin> },
+        { path: '/expenses/admin-names', element: <RequireAdmin><SuspenseWrapper><AdminNamesManagerPage /></SuspenseWrapper></RequireAdmin> },
         { path: '/trash', element: <RequireAdmin><SuspenseWrapper><TrashPage /></SuspenseWrapper></RequireAdmin> },
       ],
     }],

@@ -13,13 +13,14 @@ interface DataState {
   trash: any[];
   ledger: any[];
   isLoaded: boolean;
+  isInitialized: boolean;
   /** Set when any Firestore realtime listener fails. Null when syncing normally. */
   listenerError: string | null;
   clearListenerError: () => void;
   initialize: () => () => void;
 }
 
-export const useDataStore = create<DataState>((set) => ({
+export const useDataStore = create<DataState>((set, get) => ({
   clients: [],
   products: [],
   orders: [],
@@ -29,11 +30,20 @@ export const useDataStore = create<DataState>((set) => ({
   trash: [],
   ledger: [],
   isLoaded: false,
+  isInitialized: false,
   listenerError: null,
 
   clearListenerError: () => set({ listenerError: null }),
 
   initialize: () => {
+    // Prevent duplicate subscriptions if already initialized
+    if (get().isInitialized) {
+      return () => {};
+    }
+
+    // Reset any stale listener error on a fresh authorized initialization
+    set({ listenerError: null, isInitialized: true });
+
     let unsubs: Unsubscribe[] = [];
 
     /**
@@ -66,9 +76,52 @@ export const useDataStore = create<DataState>((set) => ({
       handleListenerError('orders')
     );
 
+    let latestPayments: Payment[] = [];
+    let latestLedger: any[] = [];
+
+    const reconcilePayments = () => {
+      const merged: Payment[] = [...latestPayments];
+      const seenIds = new Set(latestPayments.map(p => p.id));
+
+      for (const l of latestLedger) {
+        if (l.type !== 'payment') continue;
+        const pId = l.paymentId || l.id;
+        if (seenIds.has(pId) || seenIds.has(l.id)) continue;
+        seenIds.add(pId);
+        merged.push({
+          id: pId,
+          clientId: l.clientId || '',
+          clientName: l.clientName || '',
+          orderType: l.clientId === 'direct' ? 'direct' : 'client',
+          region: l.region || '',
+          invoiceId: l.invoiceId || null,
+          amount: l.amount || 0,
+          appliedAmount: l.appliedAmount,
+          appliedToPrevious: l.appliedToPrevious,
+          excessCredit: l.excessCredit,
+          isAdvance: l.isAdvance,
+          method: (l.paymentMethod || 'cash') as any,
+          reference: l.reference || null,
+          notes: l.description || null,
+          billDate: l.billDate || null,
+          paymentDate: l.paymentDate || l.createdAt,
+          createdAt: l.createdAt || l.paymentDate,
+          staffId: l.staffId,
+          staffName: l.staffName || l.recordedBy,
+          recordedBy: l.recordedBy || l.staffName,
+          updatedBy: l.recordedBy || l.staffName,
+          division: (l.division === 'bakery' ? 'bakery' : 'primary') as any,
+        });
+      }
+      set({ payments: merged });
+    };
+
     const unsubPayments = subscribeToCollection(
       COLLECTIONS.PAYMENTS,
-      (data) => set({ payments: data as Payment[] }),
+      (data) => {
+        latestPayments = data as Payment[];
+        reconcilePayments();
+      },
       handleListenerError('payments')
     );
 
@@ -111,7 +164,11 @@ export const useDataStore = create<DataState>((set) => ({
 
     const unsubLedger = subscribeToCollection(
       'ledger',
-      (data) => set({ ledger: data }),
+      (data) => {
+        latestLedger = data;
+        set({ ledger: data });
+        reconcilePayments();
+      },
       handleListenerError('ledger')
     );
 
@@ -122,6 +179,8 @@ export const useDataStore = create<DataState>((set) => ({
 
     return () => {
       unsubs.forEach(unsub => unsub());
+      unsubs = [];
+      set({ isInitialized: false, isLoaded: false });
     };
   }
 }));

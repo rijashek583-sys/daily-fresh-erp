@@ -24,9 +24,11 @@ import {
 import { db } from '../lib/firebase';
 import { toast } from 'sonner';
 import { useAuthStore } from '../stores/authStore';
-import { getProductDivision } from '../lib/utils';
+import { getProductDivision, getTodayLocalDateString } from '../lib/utils';
 import { useDataStore } from '../stores/dataStore';
-import { type Division, type PaymentMethod, type ClientOpeningBalance, type Order } from '../types';
+import { type Division, type PaymentMethod, type ClientOpeningBalance, type Order, type PaymentCorrectionRecord } from '../types';
+import { allocateOrderCredit, allocatePayment, round2, calculateUnifiedMetrics } from '../lib/billing';
+import { callRecordPayment, callCorrectPayment } from './paymentsService';
 
 function enforceAdmin() {
   const user = useAuthStore.getState().user;
@@ -71,133 +73,136 @@ export function subscribeToCollection(
 // Integrity Verification
 export async function verifyAndSyncClientTotals(clientId: string) {
   try {
+    const clientRef = doc(db, COLLECTIONS.CLIENTS, clientId);
+    const clientSnap = await getDoc(clientRef);
+    const clientData = clientSnap.exists() ? (clientSnap.data() as any) : null;
+
     const ordersQuery = query(collection(db, 'orders'), where('clientId', '==', clientId));
-    const paymentsQuery = query(collection(db, 'payments'), where('clientId', '==', clientId));
     const ledgerQuery = query(collection(db, 'ledger'), where('clientId', '==', clientId));
     
-    const [ordersSnap, paymentsSnap, ledgerSnap] = await Promise.all([
+    const [ordersSnap, ledgerSnap] = await Promise.all([
       getDocs(ordersQuery),
-      getDocs(paymentsQuery),
       getDocs(ledgerQuery)
     ]);
 
     const validOrderIds = new Set<string>();
     ordersSnap.forEach(doc => validOrderIds.add(doc.id));
 
-    const validPaymentIds = new Set<string>();
-    paymentsSnap.forEach(doc => {
-      const data = doc.data();
-      // Valid if not tied to an order (general/opening-balance payment) OR tied to an existing valid order
-      if (!data.invoiceId || validOrderIds.has(data.invoiceId)) {
-        validPaymentIds.add(doc.id);
-      }
-    });
-
     const batch = writeBatch(db);
-    let hasOrphans = false;
-
-    // 1. Delete Orphan Payments
-    paymentsSnap.forEach(doc => {
-      if (!validPaymentIds.has(doc.id)) {
-        console.warn(`[Integrity] Deleting orphan payment ${doc.id}`);
-        batch.delete(doc.ref);
-        hasOrphans = true;
-      }
-    });
+    let hasWrites = false;
 
     const primaryTotals = { totalInvoiced: 0, totalPaid: 0, totalOrders: 0, openingBalance: 0 };
     const bakeryTotals = { totalInvoiced: 0, totalPaid: 0, totalOrders: 0, openingBalance: 0 };
 
-    // 2. Process Ledger & Delete Orphan Ledger Entries
+    // Process Ledger & Clean Orphan Invoice Ledger Entries
+    // Payment entries represent valid financial records and must NEVER be purged as orphans.
     ledgerSnap.forEach(doc => {
       const data = doc.data();
       
       let isOrphan = false;
+      // Only delete invoice debits whose corresponding order was permanently removed.
       if (data.type === 'invoice' && (!data.invoiceId || !validOrderIds.has(data.invoiceId))) {
-        isOrphan = true;
-      } else if (data.type === 'payment' && (!data.paymentId || !validPaymentIds.has(data.paymentId))) {
         isOrphan = true;
       }
 
       if (isOrphan) {
-        console.warn(`[Integrity] Deleting orphan ledger entry ${doc.id}`);
+        console.warn(`[Integrity] Deleting orphan invoice ledger entry ${doc.id}`);
         batch.delete(doc.ref);
-        hasOrphans = true;
+        hasWrites = true;
       } else {
         const isBakery = data.division === 'bakery';
         const target = isBakery ? bakeryTotals : primaryTotals;
         
         if (data.type === 'invoice') {
-          target.totalInvoiced += (data.amount || 0);
+          target.totalInvoiced = round2(target.totalInvoiced + (data.amount || 0));
           target.totalOrders += 1;
         } else if (data.type === 'payment') {
-          target.totalPaid += (data.amount || 0);
+          target.totalPaid = round2(target.totalPaid + (data.amount || 0));
         } else if (data.type === 'opening_balance') {
-          target.openingBalance += (data.amount || 0);
+          target.openingBalance = round2(target.openingBalance + (data.amount || 0));
         }
       }
     });
 
-    if (hasOrphans) {
-      await batch.commit();
-      console.log(`[Integrity] Cleaned up orphans for client ${clientId}`);
+    // Historical opening balances must be supported by authentic ledger entries or approved reconciliation.
+    // Unapproved automatic reconstruction with fabricated timestamps is prohibited (Blocker 6 & Rule F).
+    const hasPrimaryLedgerOB = ledgerSnap.docs.some(d => d.data().type === 'opening_balance' && d.data().division !== 'bakery');
+    const hasBakeryLedgerOB = ledgerSnap.docs.some(d => d.data().type === 'opening_balance' && d.data().division === 'bakery');
+
+    if (!hasPrimaryLedgerOB && clientData) {
+      const legacyPrimaryOB = round2(
+        clientData.primaryTotals?.openingBalance ?? 
+        (clientData.openingBalance?.division !== 'bakery' ? (clientData.openingBalance?.amount || clientData.openingBalanceAmount || 0) : 0)
+      );
+      if (legacyPrimaryOB > 0) {
+        console.warn(`[Integrity] Client ${clientId} has legacy Primary opening balance (₹${legacyPrimaryOB}) without verified ledger entry. Approved reconciliation required.`);
+      }
     }
 
-    const primaryOpening = primaryTotals.openingBalance || 0;
-    const bakeryOpening = bakeryTotals.openingBalance || 0;
-    const primaryRawBalance = primaryOpening + primaryTotals.totalInvoiced - primaryTotals.totalPaid;
-    const bakeryRawBalance = bakeryOpening + bakeryTotals.totalInvoiced - bakeryTotals.totalPaid;
+    if (!hasBakeryLedgerOB && clientData) {
+      const legacyBakeryOB = round2(
+        clientData.bakeryTotals?.openingBalance ?? 
+        (clientData.openingBalance?.division === 'bakery' ? (clientData.openingBalance?.amount || 0) : 0)
+      );
+      if (legacyBakeryOB > 0) {
+        console.warn(`[Integrity] Client ${clientId} has legacy Bakery opening balance (₹${legacyBakeryOB}) without verified ledger entry. Approved reconciliation required.`);
+      }
+    }
 
-    const primaryOutstanding = Math.max(0, primaryRawBalance);
-    const primaryCredit = primaryRawBalance < 0 ? Math.abs(primaryRawBalance) : 0;
+    if (hasWrites) {
+      await batch.commit();
+      console.log(`[Integrity] Committed ledger corrections for client ${clientId}`);
+    }
 
-    const bakeryOutstanding = Math.max(0, bakeryRawBalance);
-    const bakeryCredit = bakeryRawBalance < 0 ? Math.abs(bakeryRawBalance) : 0;
-    
-    // Cross-division totals for fallback
-    const totalOpening = primaryOpening + bakeryOpening;
-    const totalInvoiced = primaryTotals.totalInvoiced + bakeryTotals.totalInvoiced;
-    const totalPaid = primaryTotals.totalPaid + bakeryTotals.totalPaid;
-    const outstanding = primaryOutstanding + bakeryOutstanding;
-    const availableCredit = primaryCredit + bakeryCredit;
-    const rawBalance = primaryRawBalance + bakeryRawBalance;
-    const totalOrders = primaryTotals.totalOrders + bakeryTotals.totalOrders;
+    // Authoritative Unified Calculation
+    const metrics = calculateUnifiedMetrics({
+      primaryOpening: primaryTotals.openingBalance,
+      bakeryOpening: bakeryTotals.openingBalance,
+      primaryInvoiced: primaryTotals.totalInvoiced,
+      bakeryInvoiced: bakeryTotals.totalInvoiced,
+      primaryPaid: primaryTotals.totalPaid,
+      bakeryPaid: bakeryTotals.totalPaid,
+      primaryOrders: primaryTotals.totalOrders,
+      bakeryOrders: bakeryTotals.totalOrders,
+      division: 'all',
+    });
 
-    const clientRef = doc(db, COLLECTIONS.CLIENTS, clientId);
-    
-    // We overwrite the client doc without a transaction to enforce the ledger as the ultimate source of truth
     await updateDoc(clientRef, {
-      totalRevenue: totalInvoiced,
-      totalPaid,
-      outstanding,
-      credit: availableCredit,
-      availableCredit,
-      primaryCredit,
-      bakeryCredit,
-      rawBalance,
-      totalOrders,
-      openingBalanceAmount: totalOpening,
+      totalRevenue: metrics.totalInvoiced,
+      totalPaid: metrics.totalPaid,
+      outstanding: metrics.combinedOutstanding,
+      credit: metrics.generalCredit,
+      availableCredit: metrics.generalCredit,
+      generalCredit: metrics.generalCredit,
+      primaryCredit: 0,
+      bakeryCredit: 0,
+      rawBalance: metrics.combinedRaw,
+      totalOrders: metrics.totalOrders,
+      openingBalanceAmount: metrics.openingBalance,
+      financialRevision: Number(clientData?.financialRevision) || 0,
       primaryTotals: {
         totalRevenue: primaryTotals.totalInvoiced,
         totalPaid: primaryTotals.totalPaid,
-        outstanding: primaryOutstanding,
-        credit: primaryCredit,
-        rawBalance: primaryRawBalance,
+        outstanding: metrics.primaryOutstanding,
+        credit: 0,
+        generalCredit: metrics.generalCredit,
+        rawBalance: metrics.primaryRawBalance,
         totalOrders: primaryTotals.totalOrders,
-        openingBalance: primaryOpening,
+        openingBalance: primaryTotals.openingBalance,
       },
       bakeryTotals: {
         totalRevenue: bakeryTotals.totalInvoiced,
         totalPaid: bakeryTotals.totalPaid,
-        outstanding: bakeryOutstanding,
-        credit: bakeryCredit,
-        rawBalance: bakeryRawBalance,
+        outstanding: metrics.bakeryOutstanding,
+        credit: 0,
+        generalCredit: metrics.generalCredit,
+        rawBalance: metrics.bakeryRawBalance,
         totalOrders: bakeryTotals.totalOrders,
-        openingBalance: bakeryOpening,
+        openingBalance: bakeryTotals.openingBalance,
       }
     });
     
-    console.log(`[Integrity] Client ${clientId} synced. Opening: ${totalOpening}, Primary Out: ${primaryOutstanding} (Credit: ${primaryCredit}), Bakery Out: ${bakeryOutstanding} (Credit: ${bakeryCredit})`);
+    console.log(`[Integrity] Client ${clientId} synced. Raw: ${metrics.combinedRaw}, Outstanding: ${metrics.combinedOutstanding}, General Credit: ${metrics.generalCredit}`);
   } catch (err) {
     console.error(`[Integrity] Failed to sync client ${clientId}:`, err);
   }
@@ -245,22 +250,33 @@ export async function saveClientOpeningBalance(clientId: string, input: ClientOp
     const clientRef = doc(db, COLLECTIONS.CLIENTS, clientId);
     const clientSnap = await getDoc(clientRef);
     if (!clientSnap.exists()) throw new Error('Client not found');
-    const clientData = clientSnap.data();
+    const clientData = clientSnap.data() as any;
 
-    const amount = Number(input.amount) || 0;
+    const amount = round2(Number(input.amount) || 0);
     if (amount < 0) throw new Error('Opening balance amount cannot be negative');
 
     const asOfDate = input.asOfDate || new Date().toISOString().split('T')[0];
     const notes = input.notes?.trim() || '';
     const division: Division = input.division === 'bakery' ? 'bakery' : 'primary';
 
-    // Find any existing opening_balance ledger entries for this client
+    // Business Rule 10: Saving a Primary opening balance must never overwrite or delete a Bakery opening balance, and vice versa.
+    // Query only opening_balance ledger entries for THIS specific division.
     const ledgerQuery = query(
       collection(db, 'ledger'),
       where('clientId', '==', clientId),
-      where('type', '==', 'opening_balance')
+      where('type', '==', 'opening_balance'),
+      where('division', '==', division)
     );
     const ledgerSnap = await getDocs(ledgerQuery);
+
+    const otherOB = round2(
+      division === 'bakery'
+        ? (clientData.primaryTotals?.openingBalance ?? 
+           (clientData.openingBalance?.division !== 'bakery' ? (clientData.openingBalance?.amount || clientData.openingBalanceAmount || 0) : 0))
+        : (clientData.bakeryTotals?.openingBalance ?? 
+           (clientData.openingBalance?.division === 'bakery' ? (clientData.openingBalance?.amount || 0) : 0))
+    );
+    const totalOpening = round2(amount + otherOB);
 
     const batch = writeBatch(db);
 
@@ -269,7 +285,7 @@ export async function saveClientOpeningBalance(clientId: string, input: ClientOp
         ? doc(collection(db, 'ledger'))
         : ledgerSnap.docs[0].ref;
 
-      // Remove any duplicate opening_balance entries if present
+      // Remove any duplicate opening_balance entries for this division if present
       if (ledgerSnap.docs.length > 1) {
         for (let i = 1; i < ledgerSnap.docs.length; i++) {
           batch.delete(ledgerSnap.docs[i].ref);
@@ -285,7 +301,7 @@ export async function saveClientOpeningBalance(clientId: string, input: ClientOp
         amount,
         billDate: asOfDate,
         createdAt: `${asOfDate}T00:00:00.000Z`,
-        description: notes ? `Opening Balance - ${notes}` : 'Opening Balance',
+        description: notes ? `Opening Balance (${division === 'bakery' ? 'Bakery' : 'Primary'}) - ${notes}` : `Opening Balance (${division === 'bakery' ? 'Bakery' : 'Primary'})`,
         division,
         updatedBy: adminName,
       };
@@ -300,17 +316,25 @@ export async function saveClientOpeningBalance(clientId: string, input: ClientOp
         updatedBy: adminName,
       };
 
-      batch.update(clientRef, {
-        openingBalance: openingRecord,
-        openingBalanceAmount: amount,
-      });
+      const clientUpdates: any = {
+        openingBalanceAmount: totalOpening,
+        [`${division}Totals.openingBalance`]: amount,
+      };
+      if (clientData.openingBalance?.division === division || !clientData.openingBalance || division === 'primary') {
+        clientUpdates.openingBalance = openingRecord;
+      }
+      batch.update(clientRef, clientUpdates);
     } else {
-      // If amount is 0, delete existing opening balance ledger entries
+      // If amount is 0, delete existing opening balance ledger entries for THIS division only
       ledgerSnap.forEach(d => batch.delete(d.ref));
-      batch.update(clientRef, {
-        openingBalance: null,
-        openingBalanceAmount: 0,
-      });
+      const clientUpdates: any = {
+        openingBalanceAmount: totalOpening,
+        [`${division}Totals.openingBalance`]: 0,
+      };
+      if (clientData.openingBalance?.division === division) {
+        clientUpdates.openingBalance = null;
+      }
+      batch.update(clientRef, clientUpdates);
     }
 
     await batch.commit();
@@ -331,6 +355,9 @@ export async function moveToTrash(
   deletedBy: string
 ) {
   enforceAdmin();
+  if (originalCollection === 'payments') {
+    throw new Error('Direct trashing of payments is prohibited. Use payment correction (callCorrectPayment) with amount 0 to cancel a payment and authoritatively reverse financial ledger entries.');
+  }
   try {
     const deletedAt = new Date().toISOString();
     const batch = writeBatch(db);
@@ -353,17 +380,20 @@ export async function moveToTrash(
     //  1. Delete its associated ledger entry (for client orders).
     //  2. Atomically update the client's denormalized aggregates.
     if (originalCollection === 'orders') {
-      // Critical Safety: Check for existing payment dependencies
-      const paymentsQuery = query(
-        collection(db, 'payments'),
-        where('invoiceId', '==', docId)
-      );
-      const paymentsSnap = await getDocs(paymentsQuery);
+      // Critical Safety: Check for existing payment dependencies in payments OR ledger collection
+      const [paymentsSnap, ledgerPaymentsSnap] = await Promise.all([
+        getDocs(query(collection(db, 'payments'), where('invoiceId', '==', docId))),
+        getDocs(query(collection(db, 'ledger'), where('type', '==', 'payment'), where('invoiceId', '==', docId))),
+      ]);
       const activePayments = paymentsSnap.docs.filter(p => !p.data().deletedAt);
-      if (activePayments.length > 0) {
-        const totalPaid = activePayments.reduce((s, p) => s + (p.data().amount || 0), 0);
+      const activeLedgerPayments = ledgerPaymentsSnap.docs;
+      const paymentCount = Math.max(activePayments.length, activeLedgerPayments.length);
+      if (paymentCount > 0) {
+        const totalPaid = activeLedgerPayments.length > 0
+          ? activeLedgerPayments.reduce((s, p) => s + (p.data().amount || 0), 0)
+          : activePayments.reduce((s, p) => s + (p.data().amount || 0), 0);
         throw new Error(
-          `Cannot delete order #${docId.slice(0, 8)}: Order has ${activePayments.length} recorded payment(s) totalling ₹${totalPaid.toLocaleString('en-IN')}. Deletion is blocked to protect payment records and client ledger balances.`
+          `Cannot delete order #${docId.slice(0, 8)}: Order has ${paymentCount} recorded payment(s) totalling ₹${totalPaid.toLocaleString('en-IN')}. Deletion is blocked to protect payment records and client ledger balances.`
         );
       }
 
@@ -387,25 +417,73 @@ export async function moveToTrash(
           batch.delete(lDoc.ref);
         });
       }
-    } else if (originalCollection === 'payments' && originalData?.clientId && originalData.clientId !== 'direct') {
-      // Find and trash the associated ledger credit
-      const ledgerQuery = query(
-        collection(db, 'ledger'), 
-        where('type', '==', 'payment'), 
-        where('paymentId', '==', docId)
-      );
-      const ledgerSnap = await getDocs(ledgerQuery);
-      ledgerSnap.forEach((lDoc) => {
-        const lTrashRef = doc(db, 'trash', lDoc.id);
-        batch.set(lTrashRef, {
-          originalCollection: 'ledger',
-          originalDocumentId: lDoc.id,
-          originalData: lDoc.data(),
-          deletedAt,
-          deletedBy
+    } else if (originalCollection === 'payments') {
+      if (originalData?.clientId && originalData.clientId !== 'direct') {
+        // Find and trash the associated ledger credit
+        const ledgerQuery = query(
+          collection(db, 'ledger'), 
+          where('type', '==', 'payment'), 
+          where('paymentId', '==', docId)
+        );
+        const ledgerSnap = await getDocs(ledgerQuery);
+        ledgerSnap.forEach((lDoc) => {
+          const lTrashRef = doc(db, 'trash', lDoc.id);
+          batch.set(lTrashRef, {
+            originalCollection: 'ledger',
+            originalDocumentId: lDoc.id,
+            originalData: lDoc.data(),
+            deletedAt,
+            deletedBy
+          });
+          batch.delete(lDoc.ref);
         });
-        batch.delete(lDoc.ref);
-      });
+      }
+
+      // If this payment was applied against a specific order/bill, reverse the order's paidAmount
+      if (originalData?.invoiceId) {
+        try {
+          const orderRef = doc(db, COLLECTIONS.ORDERS, originalData.invoiceId);
+          const orderSnap = await getDoc(orderRef);
+          if (orderSnap.exists()) {
+            const oData = orderSnap.data();
+            const revApplied = Number(originalData.appliedAmount !== undefined ? originalData.appliedAmount : (originalData.amount || 0));
+            const currentPaid = Number(oData.paidAmount || 0);
+            const newPaid = Math.max(0, round2(currentPaid - revApplied));
+            const netDue = Number(oData.netDue !== undefined ? oData.netDue : (oData.total || 0));
+            const newStatus = newPaid >= netDue - 0.01 ? 'paid' : (newPaid > 0.01 ? 'partial' : 'pending');
+            batch.update(orderRef, {
+              paidAmount: newPaid,
+              paymentStatus: newStatus,
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        } catch (ordErr) {
+          console.warn('[Trash] Could not update order on payment trash:', ordErr);
+        }
+      }
+
+      // If this payment also settled a counterpart division order, reverse its paidAmount too
+      if (originalData?.otherInvoiceId && Number(originalData.appliedToOtherBill) > 0) {
+        try {
+          const otherRef = doc(db, COLLECTIONS.ORDERS, originalData.otherInvoiceId);
+          const otherSnap = await getDoc(otherRef);
+          if (otherSnap.exists()) {
+            const otherData = otherSnap.data();
+            const otherRevApplied = Number(originalData.appliedToOtherBill);
+            const otherCurrentPaid = Number(otherData.paidAmount || 0);
+            const otherNewPaid = Math.max(0, round2(otherCurrentPaid - otherRevApplied));
+            const otherNetDue = Number(otherData.netDue !== undefined ? otherData.netDue : (otherData.total || 0));
+            const otherNewStatus = otherNewPaid >= otherNetDue - 0.01 ? 'paid' : (otherNewPaid > 0.01 ? 'partial' : 'pending');
+            batch.update(otherRef, {
+              paidAmount: otherNewPaid,
+              paymentStatus: otherNewStatus,
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        } catch (otherErr) {
+          console.warn('[Trash] Could not update counterpart order on payment trash:', otherErr);
+        }
+      }
     }
 
     await batch.commit();
@@ -473,14 +551,23 @@ export async function bulkDeleteOrders(
       return { totalRequested: 0, successCount: 0, failedCount: 0, deletedOrderIds: [], failures: [] };
     }
 
-    // 1. Build payment lookup from store state
-    const { payments: allPayments } = useDataStore.getState();
+    // 1. Build payment lookup from store state (payments and ledger payments)
+    const { payments: allPayments, ledger: allLedger } = useDataStore.getState();
     const paymentsByInvoice = new Map<string, any[]>();
     for (const p of allPayments || []) {
       if (!p.deletedAt && p.invoiceId) {
         const list = paymentsByInvoice.get(p.invoiceId) || [];
         list.push(p);
         paymentsByInvoice.set(p.invoiceId, list);
+      }
+    }
+    for (const l of allLedger || []) {
+      if (l.type === 'payment' && l.invoiceId) {
+        const list = paymentsByInvoice.get(l.invoiceId) || [];
+        if (!list.some(p => p.id === (l.paymentId || l.id))) {
+          list.push({ id: l.paymentId || l.id, amount: l.amount, invoiceId: l.invoiceId });
+          paymentsByInvoice.set(l.invoiceId, list);
+        }
       }
     }
 
@@ -513,18 +600,23 @@ export async function bulkDeleteOrders(
       const chunkOrdersToDelete: Order[] = [];
 
       for (const order of chunk) {
-        // Double-check Firestore payments collection to guarantee no concurrent payments were added
+        // Double-check Firestore payments and ledger collections to guarantee no concurrent payments exist
         try {
-          const paymentsSnap = await getDocs(
-            query(collection(db, 'payments'), where('invoiceId', '==', order.id))
-          );
+          const [paymentsSnap, ledgerPaymentsSnap] = await Promise.all([
+            getDocs(query(collection(db, 'payments'), where('invoiceId', '==', order.id))),
+            getDocs(query(collection(db, 'ledger'), where('type', '==', 'payment'), where('invoiceId', '==', order.id))),
+          ]);
           const activePayments = paymentsSnap.docs.filter(d => !d.data().deletedAt);
-          if (activePayments.length > 0) {
-            const totalPaid = activePayments.reduce((s, d) => s + (d.data().amount || 0), 0);
+          const activeLedgerPayments = ledgerPaymentsSnap.docs;
+          const paymentCount = Math.max(activePayments.length, activeLedgerPayments.length);
+          if (paymentCount > 0) {
+            const totalPaid = activeLedgerPayments.length > 0
+              ? activeLedgerPayments.reduce((s, d) => s + (d.data().amount || 0), 0)
+              : activePayments.reduce((s, d) => s + (d.data().amount || 0), 0);
             failures.push({
               orderId: order.id,
               clientName: order.clientName || 'Direct Sale',
-              reason: `Found active payment record in database (₹${totalPaid.toLocaleString('en-IN')}). Deletion blocked.`,
+              reason: `Found active payment record in database (${paymentCount} payment(s), ₹${totalPaid.toLocaleString('en-IN')}). Deletion blocked.`,
             });
             continue;
           }
@@ -688,47 +780,46 @@ export async function addOrder(orderData: any) {
       let bakeryCreditApplied = 0;
 
       if (!isDirectSale && clientSnap) {
-        const clientDoc = clientSnap.data() || {};
-        const pRaw = clientDoc.primaryTotals?.rawBalance !== undefined
-          ? clientDoc.primaryTotals.rawBalance
-          : ((clientDoc.primaryTotals?.openingBalance || 0) + (clientDoc.primaryTotals?.totalRevenue || 0) - (clientDoc.primaryTotals?.totalPaid || 0));
-        const clientPrimaryCredit = clientDoc.primaryTotals?.credit !== undefined
-          ? (clientDoc.primaryTotals.credit || 0)
-          : (pRaw < 0 ? Math.abs(pRaw) : (clientDoc.primaryCredit || 0));
+          const clientDoc = clientSnap.data() || {};
+          const pRaw = clientDoc.primaryTotals?.rawBalance !== undefined
+            ? clientDoc.primaryTotals.rawBalance
+            : ((clientDoc.primaryTotals?.openingBalance || 0) + (clientDoc.primaryTotals?.totalRevenue || 0) - (clientDoc.primaryTotals?.totalPaid || 0));
+          const bRaw = clientDoc.bakeryTotals?.rawBalance !== undefined
+            ? clientDoc.bakeryTotals.rawBalance
+            : ((clientDoc.bakeryTotals?.openingBalance || 0) + (clientDoc.bakeryTotals?.totalRevenue || 0) - (clientDoc.bakeryTotals?.totalPaid || 0));
+          const combinedRaw = round2(pRaw + bRaw);
 
-        const bRaw = clientDoc.bakeryTotals?.rawBalance !== undefined
-          ? clientDoc.bakeryTotals.rawBalance
-          : ((clientDoc.bakeryTotals?.openingBalance || 0) + (clientDoc.bakeryTotals?.totalRevenue || 0) - (clientDoc.bakeryTotals?.totalPaid || 0));
-        const clientBakeryCredit = clientDoc.bakeryTotals?.credit !== undefined
-          ? (clientDoc.bakeryTotals.credit || 0)
-          : (bRaw < 0 ? Math.abs(bRaw) : (clientDoc.bakeryCredit || 0));
+          const generalCredit = Math.max(
+            0,
+            Number(clientDoc.generalCredit ?? clientDoc.availableCredit ?? clientDoc.credit ?? 0),
+            combinedRaw < 0 ? Math.abs(combinedRaw) : 0
+          );
 
-        if (orderData.division === 'primary') {
-          creditApplied = Math.min(clientPrimaryCredit, total);
-          primaryCreditApplied = creditApplied;
-          bakeryCreditApplied = 0;
-        } else if (orderData.division === 'bakery') {
-          creditApplied = Math.min(clientBakeryCredit, total);
-          primaryCreditApplied = 0;
-          bakeryCreditApplied = creditApplied;
-        } else if (orderData.division === 'all') {
+          const clientPrimaryCredit = Math.max(0, Number(clientDoc.primaryCredit || 0), pRaw < 0 ? Math.abs(pRaw) : 0);
+          const clientBakeryCredit = Math.max(0, Number(clientDoc.bakeryCredit || 0), bRaw < 0 ? Math.abs(bRaw) : 0);
           const { products } = useDataStore.getState();
-          let pSub = 0;
-          let bSub = 0;
+          let primarySubtotal = 0;
+          let bakerySubtotal = 0;
           (orderData.items || []).forEach((i: any) => {
             const prod = products.find((p: any) => p.id === i.productId);
-            const div = getProductDivision(prod || { name: i.productName });
-            if (div === 'primary') pSub += i.total;
-            else bSub += i.total;
+            if (getProductDivision(prod || { name: i.productName }) === 'primary') primarySubtotal += i.total;
+            else bakerySubtotal += i.total;
           });
-          primaryCreditApplied = Math.min(clientPrimaryCredit, pSub);
-          bakeryCreditApplied = Math.min(clientBakeryCredit, bSub);
-          creditApplied = primaryCreditApplied + bakeryCreditApplied;
-        }
+
+          ({ creditApplied, primaryCreditApplied, bakeryCreditApplied } = allocateOrderCredit({
+            division: orderData.division,
+            total,
+            primarySubtotal,
+            bakerySubtotal,
+            generalCredit,
+            primaryCredit: clientPrimaryCredit,
+            bakeryCredit: clientBakeryCredit,
+            requestedCreditApplied: orderData.creditApplied,
+          }));
       }
 
-      const netDue = Math.max(0, total - creditApplied);
-      const paymentStatus = creditApplied >= total ? 'paid' : 'pending';
+      const netDue = Math.max(0, round2(total - creditApplied));
+      const paymentStatus = netDue <= 0.005 ? 'paid' : (creditApplied > 0 ? 'partial' : 'pending');
 
       const oData = {
         ...orderData,
@@ -840,18 +931,56 @@ export async function addOrder(orderData: any) {
 export async function updateOrder(orderId: string, updates: any) {
   enforceStaffOrAdmin();
   try {
+    const orderRef = doc(db, COLLECTIONS.ORDERS, orderId);
+
+    // Pre-fetch any existing invoice ledger entries before the transaction
+    const ledgerQuery = query(
+      collection(db, 'ledger'), 
+      where('type', '==', 'invoice'), 
+      where('invoiceId', '==', orderId)
+    );
+    const ledgerSnap = await getDocs(ledgerQuery);
+
     const result = await runTransaction(db, async (transaction) => {
-      const orderRef = doc(db, COLLECTIONS.ORDERS, orderId);
+      // ─── PHASE 1: ALL READS ───
       const orderSnap = await transaction.get(orderRef);
       if (!orderSnap.exists()) throw new Error('Order not found');
 
       const oldData = orderSnap.data();
-      const oldTotal: number = oldData.total || 0;
-      const newTotal: number = updates.total ?? oldTotal;
-      const totalDiff = newTotal - oldTotal;
+      const oldTotal: number = round2(oldData.total || 0);
+      const newTotal: number = updates.total !== undefined ? round2(Number(updates.total)) : oldTotal;
+      const totalDiff = round2(newTotal - oldTotal);
 
+      // Recalculate netDue and paymentStatus when total or settlements change
+      const creditApplied = round2(
+        updates.creditApplied !== undefined
+          ? Number(updates.creditApplied)
+          : (oldData.creditApplied || ((oldData.primaryCreditApplied || 0) + (oldData.bakeryCreditApplied || 0)) || 0)
+      );
+      const currentPaid = round2(updates.paidAmount !== undefined ? Number(updates.paidAmount) : (oldData.paidAmount || 0));
+      const totalSettled = round2(creditApplied + currentPaid);
+      const recalculatedNetDue = Math.max(0, round2(newTotal - creditApplied));
+      let recalculatedStatus = updates.paymentStatus || oldData.paymentStatus;
+      if (updates.paymentStatus === undefined || updates.total !== undefined) {
+        if (totalSettled >= newTotal - 0.01) {
+          recalculatedStatus = 'paid';
+        } else if (totalSettled > 0.01) {
+          recalculatedStatus = 'partial';
+        } else {
+          recalculatedStatus = 'pending';
+        }
+      }
+
+      const mergedUpdates = {
+        ...updates,
+        netDue: recalculatedNetDue,
+        paymentStatus: recalculatedStatus,
+        updatedAt: new Date().toISOString(),
+      };
+
+      // ─── PHASE 2: ALL WRITES ───
       // Apply order field updates
-      transaction.update(orderRef, updates);
+      transaction.update(orderRef, mergedUpdates);
 
       // If the total, items, division, or deliveryDate changed, keep the ledger in sync
       if (
@@ -862,13 +991,6 @@ export async function updateOrder(orderId: string, updates: any) {
       ) {
         if (oldData.clientId && oldData.clientId !== 'direct') {
           // Delete all old invoice ledger entries for this order
-          const ledgerQuery = query(
-            collection(db, 'ledger'), 
-            where('type', '==', 'invoice'), 
-            where('invoiceId', '==', orderId)
-          );
-          const ledgerSnap = await getDocs(ledgerQuery);
-          // It is generally safe to run getDocs in a transaction if we use transaction.delete
           ledgerSnap.forEach((lDoc) => {
             transaction.delete(lDoc.ref);
           });
@@ -977,67 +1099,44 @@ export async function updateOrder(orderId: string, updates: any) {
 
 // Payments
 export async function updatePayment(paymentId: string, updates: any) {
-  enforceStaffOrAdmin();
-  try {
-    const clientIdToSync = await runTransaction(db, async (transaction) => {
-      const paymentRef = doc(db, COLLECTIONS.PAYMENTS, paymentId);
-      const paymentSnap = await transaction.get(paymentRef);
-      if (!paymentSnap.exists()) throw new Error('Payment not found');
+  const currentUser = useAuthStore.getState().user;
+  if (!currentUser || currentUser.role !== 'admin') {
+    throw new Error('Staff members are not authorized to edit or correct recorded payments. Admin access required.');
+  }
 
-      const oldData = paymentSnap.data();
-      const oldAmount: number = oldData.amount || 0;
-      const newAmount: number = updates.amount ?? oldAmount;
-      const amountDiff = newAmount - oldAmount;
-
-      const paymentUpdates: any = { ...updates };
-
-      if (oldData.invoiceId && updates.amount !== undefined) {
-        const orderRef = doc(db, COLLECTIONS.ORDERS, oldData.invoiceId);
-        const orderSnap = await transaction.get(orderRef);
-        if (orderSnap.exists()) {
-          const oDoc = orderSnap.data();
-          const orderTotal = Number(oDoc.total || 0);
-          const orderCreditApplied = Number(oDoc.creditApplied || 0);
-          const orderNetDue = Math.max(0, orderTotal - orderCreditApplied);
-          
-          const newApplied = Math.min(newAmount, orderNetDue);
-          const newExcess = Math.max(0, newAmount - orderNetDue);
-          paymentUpdates.appliedAmount = newApplied;
-          paymentUpdates.excessCredit = newExcess;
-          paymentUpdates.isAdvance = newExcess > 0;
-        }
-      }
-
-      transaction.update(paymentRef, paymentUpdates);
-
-      if ((amountDiff !== 0 || updates.division !== undefined) && oldData.clientId && oldData.clientId !== 'direct') {
-        // Keep the ledger credit entry in sync
-        const ledgerQuery = query(
-          collection(db, 'ledger'), 
-          where('type', '==', 'payment'), 
-          where('paymentId', '==', paymentId)
-        );
-        const ledgerSnap = await getDocs(ledgerQuery);
-        ledgerSnap.forEach((lDoc) => {
-          const lUpdates: any = {};
-          if (amountDiff !== 0) lUpdates.amount = increment(amountDiff);
-          if (updates.division !== undefined) lUpdates.division = updates.division;
-          if (paymentUpdates.appliedAmount !== undefined) lUpdates.appliedAmount = paymentUpdates.appliedAmount;
-          if (paymentUpdates.excessCredit !== undefined) lUpdates.excessCredit = paymentUpdates.excessCredit;
-          
-          if (Object.keys(lUpdates).length > 0) {
-            transaction.update(lDoc.ref, lUpdates);
-          }
-        });
-      }
-      return oldData.clientId !== 'direct' ? oldData.clientId : null;
-    });
-    
-    if (clientIdToSync) {
-      await verifyAndSyncClientTotals(clientIdToSync);
+  if (updates.amount !== undefined) {
+    const reason = (updates.correctionReason || '').trim();
+    if (!reason) {
+      throw new Error('A correction reason is required before submitting a payment correction.');
     }
-  } catch (error) {
-    console.error("Error updating payment:", error);
+
+    try {
+      const res = await callCorrectPayment({
+        paymentId,
+        newAmount: Number(updates.amount),
+        correctionReason: reason,
+        division: updates.division,
+        paymentDate: updates.paymentDate,
+        method: updates.method,
+        reference: updates.reference,
+        notes: updates.notes,
+      });
+      return res;
+    } catch (err: any) {
+      console.error('[Payments] Server-side payment correction failed:', err);
+      throw new Error(err?.message || 'Failed to correct payment on the trusted server.');
+    }
+  }
+
+  // Non-amount updates (metadata like reference or notes)
+  try {
+    const paymentRef = doc(db, COLLECTIONS.PAYMENTS, paymentId);
+    const metadataUpdates: any = { updatedAt: new Date().toISOString() };
+    if (updates.notes !== undefined) metadataUpdates.notes = updates.notes;
+    if (updates.reference !== undefined) metadataUpdates.reference = updates.reference;
+    await updateDoc(paymentRef, metadataUpdates);
+  } catch (error: any) {
+    console.error("Error updating payment metadata:", error);
     toast.error('Failed to update payment');
     throw error;
   }
@@ -1045,173 +1144,66 @@ export async function updatePayment(paymentId: string, updates: any) {
 
 export async function recordPaymentAtomic(paymentData: any) {
   enforceStaffOrAdmin();
+  const {
+    clientId,
+    amount,
+    method,
+    billDate,
+    paymentDate,
+    invoiceId,
+    otherInvoiceId,
+    reference,
+    notes,
+    division,
+    orderType,
+    idempotencyKey,
+  } = paymentData;
+
+  const isDirectSale = orderType === 'direct' || clientId === 'direct';
+
+  if (!isDirectSale && !clientId) throw new Error("Missing client ID");
+  if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
+    throw new Error("Invalid payment amount. Amount must be greater than ₹0.");
+  }
+
+  const cleanKey = (idempotencyKey || '').trim();
+  if (!cleanKey) {
+    throw new Error("Missing durable idempotencyKey. Every payment submission must include a unique operation key.");
+  }
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(cleanKey)) {
+    throw new Error("Invalid idempotencyKey format. Must be an 8–128 character identifier (letters, digits, underscores, hyphens).");
+  }
+
+  const currentUser = useAuthStore.getState().user;
+  const isStaff = currentUser?.role === 'staff';
+  const todayLocalStr = getTodayLocalDateString();
+
+  const effectivePaymentDate = isStaff ? todayLocalStr : (paymentDate || todayLocalStr);
+  const effectiveBillDate = isStaff
+    ? (invoiceId ? (billDate || effectivePaymentDate) : effectivePaymentDate)
+    : (billDate || effectivePaymentDate);
+
   try {
-    const {
-      clientId,
+    const result = await callRecordPayment({
+      clientId: isDirectSale ? 'direct' : clientId,
       amount,
-      method,
-      updatedBy,
-      billDate,
-      paymentDate,
-      clientName,
-      invoiceId,
-      reference,
-      notes,
-      region,
-      staffId,
-      staffName,
-      orderType
-    } = paymentData;
-    
-    const isDirectSale = orderType === 'direct' || clientId === 'direct';
-
-    // Validate inputs
-    if (!isDirectSale && !clientId) throw new Error("Missing client ID");
-    if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
-      throw new Error("Invalid payment amount. Amount must be greater than ₹0.");
-    }
-
-    const currentUser = useAuthStore.getState().user;
-    const effectiveStaffId = staffId || currentUser?.uid || null;
-    const effectiveStaffName = staffName || paymentData.recordedBy || currentUser?.name || currentUser?.displayName || updatedBy || 'Staff';
-
-    // If paying against an invoice, find existing payments on that invoice first
-    let existingOrderPaid = 0;
-    if (invoiceId) {
-      try {
-        const existingPaymentsSnap = await getDocs(
-          query(collection(db, 'payments'), where('invoiceId', '==', invoiceId))
-        );
-        existingPaymentsSnap.docs.forEach(d => {
-          const p = d.data();
-          if (!p.deletedAt) {
-            existingOrderPaid += (p.appliedAmount !== undefined ? p.appliedAmount : (p.amount || 0));
-          }
-        });
-      } catch (err) {
-        console.warn('Could not read existing payments for invoice:', err);
-      }
-    }
-
-    await runTransaction(db, async (transaction) => {
-      let resolvedRegion = region || (isDirectSale ? 'Direct Sale' : '');
-      let resolvedClientName = clientName || (isDirectSale ? 'Direct Sale' : '');
-
-      let appliedAmount = amount;
-      let excessCredit = 0;
-      let isAdvance = false;
-
-      if (!isDirectSale) {
-        // 1. Fetch Client
-        const clientRef = doc(db, 'clients', clientId);
-        const clientSnap = await transaction.get(clientRef);
-        if (!clientSnap.exists()) throw new Error("Client not found");
-        const clientDocData = clientSnap.data();
-        resolvedRegion = region || clientDocData.region || '';
-        resolvedClientName = clientName || clientDocData.name || '';
-
-        if (invoiceId) {
-          const orderRef = doc(db, COLLECTIONS.ORDERS, invoiceId);
-          const orderSnap = await transaction.get(orderRef);
-          if (orderSnap.exists()) {
-            const oDoc = orderSnap.data();
-            const orderTotal = Number(oDoc.total || 0);
-            const orderCreditApplied = Number(oDoc.creditApplied || 0);
-            const orderNetDue = Math.max(0, orderTotal - orderCreditApplied);
-            const orderRemaining = Math.max(0, orderNetDue - existingOrderPaid);
-
-            appliedAmount = Math.min(amount, orderRemaining);
-            excessCredit = Math.max(0, amount - orderRemaining);
-
-            const newPaid = existingOrderPaid + appliedAmount;
-            const newStatus = (newPaid >= orderNetDue) ? 'paid' : (newPaid > 0 ? 'partial' : 'pending');
-
-            transaction.update(orderRef, {
-              paidAmount: newPaid,
-              paymentStatus: newStatus,
-              updatedAt: new Date().toISOString()
-            });
-          }
-        } else {
-          // Advance payment without a specific bill
-          appliedAmount = 0;
-          excessCredit = amount;
-          isAdvance = true;
-        }
-      }
-      
-      // 2. Create Payment Document
-      const paymentRef = doc(collection(db, COLLECTIONS.PAYMENTS));
-      const pData: any = {
-        id: paymentRef.id,
-        orderType: isDirectSale ? 'direct' : 'client',
-        clientId: isDirectSale ? 'direct' : clientId,
-        clientName: resolvedClientName,
-        region: resolvedRegion,
-        invoiceId: invoiceId || null,
-        amount,
-        appliedAmount,
-        excessCredit,
-        isAdvance,
-        method,
-        reference: reference || null,
-        notes: notes || null,
-        billDate: billDate || null,
-        paymentDate: paymentDate || (billDate ?? null),
-        createdAt: paymentDate ? `${paymentDate} 00:00:00` : new Date().toISOString(),
-        staffId: effectiveStaffId,
-        staffName: effectiveStaffName,
-        recordedBy: effectiveStaffName,
-        updatedBy: effectiveStaffName,
-        division: (paymentData.division === 'bakery' ? 'bakery' : 'primary') as 'primary' | 'bakery'
-      };
-
-      transaction.set(paymentRef, pData);
-      
-      // 3. Create Ledger Transaction (Credit) - ONLY FOR CLIENT ORDERS
-      if (!isDirectSale) {
-        const ledgerRef = doc(collection(db, 'ledger'));
-        const ledgerDesc = invoiceId
-          ? (excessCredit > 0
-              ? `Payment received against bill (${method.replace('_', ' ')}) - Applied: ₹${appliedAmount.toFixed(2)}, Advance Credit: ₹${excessCredit.toFixed(2)}${reference ? ` - Ref: ${reference}` : ''}`
-              : `Payment received (${method.replace('_', ' ')})${reference ? ` - Ref: ${reference}` : ''}`)
-          : `Advance payment received (${method.replace('_', ' ')})${reference ? ` - Ref: ${reference}` : ''}`;
-
-        transaction.set(ledgerRef, {
-          id: ledgerRef.id,
-          type: 'payment',
-          paymentId: paymentRef.id,
-          clientId,
-          clientName: resolvedClientName,
-          region: resolvedRegion,
-          invoiceId: invoiceId || null,
-          amount,
-          appliedAmount,
-          excessCredit,
-          isAdvance,
-          paymentDate: pData.createdAt,
-          paymentMethod: method,
-          description: ledgerDesc,
-          createdAt: new Date().toISOString(),
-          billDate: billDate || null,
-          division: pData.division,
-          staffId: effectiveStaffId,
-          staffName: effectiveStaffName,
-          recordedBy: effectiveStaffName,
-        });
-      }
+      paymentDate: effectivePaymentDate,
+      billDate: effectiveBillDate,
+      invoiceId: invoiceId || null,
+      otherInvoiceId: otherInvoiceId || null,
+      division: division === 'bakery' ? 'bakery' : 'primary',
+      method: method || 'cash',
+      reference: reference ? String(reference).trim() : null,
+      notes: notes ? String(notes).trim() : null,
+      idempotencyKey: cleanKey,
+      orderType: isDirectSale ? 'direct' : 'client',
     });
-    
-    if (!isDirectSale && clientId) {
-      await verifyAndSyncClientTotals(clientId);
-    }
-    
-    toast.success('Payment recorded successfully');
-    return true;
-  } catch (error: any) {
-    console.error("Atomic payment error:", error);
-    toast.error(error.message || 'Failed to record payment');
-    throw error;
+
+    return result;
+  } catch (err: any) {
+    console.error('[Payments] Server-side payment recording failed:', err);
+    // Task 7: Never fall back to legacy direct Firestore financial writes.
+    throw new Error(err?.message || 'Failed to record payment on the trusted server.');
   }
 }
 
@@ -1236,53 +1228,47 @@ export interface DirectSaleInput {
   };
 }
 
-export async function createDirectSale(input: DirectSaleInput): Promise<string> {
+export async function createDirectSale(input: DirectSaleInput, customIdempotencyKey?: string): Promise<string> {
   enforceStaffOrAdmin();
-  const currentUser = useAuthStore.getState().user;
-  const staffId = currentUser?.uid || '';
-  const staffName = currentUser?.name || currentUser?.displayName || (currentUser?.role === 'admin' ? 'Admin' : 'Staff');
+  const paymentAmount = input.payment && input.payment.amount > 0 ? round2(input.payment.amount) : 0;
 
-  const subtotal = input.items.reduce((sum, item) => sum + (item.total || 0), 0);
-  const total = subtotal;
+  // Derive durable idempotency key: reuse caller key if provided, or generate deterministic key
+  const durableKey = customIdempotencyKey || (
+    input.payment?.reference && input.payment.reference.startsWith('pay_')
+      ? input.payment.reference
+      : `pay_direct_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
+  );
 
-  // 1. Create order with orderType 'direct'
-  const orderId = await addOrder({
-    orderType: 'direct',
-    clientId: 'direct',
-    clientName: 'Direct Sale',
-    region: 'Direct Sale',
-    deliveryDate: input.date,
-    items: input.items,
-    subtotal,
-    tax: 0,
-    total,
-    division: input.division || 'primary',
-    createdAt: `${input.date}T${new Date().toTimeString().split(' ')[0]}`,
-    notes: input.notes || '',
-    staffId,
-    staffName,
-  });
-
-  // 2. If initial payment provided, record payment atomically
-  if (input.payment && input.payment.amount > 0) {
-    await recordPaymentAtomic({
+  try {
+    const result = await callRecordPayment({
       orderType: 'direct',
       clientId: 'direct',
-      clientName: 'Direct Sale',
-      region: 'Direct Sale',
-      invoiceId: orderId,
-      amount: input.payment.amount,
-      method: input.payment.method,
-      reference: input.payment.reference || input.reference,
-      billDate: input.date,
+      amount: paymentAmount,
+      method: input.payment?.method || 'cash',
+      reference: input.payment?.reference || input.reference || null,
+      notes: input.notes || null,
       paymentDate: input.date,
+      billDate: input.date,
       division: input.division || 'primary',
-      staffId,
-      staffName,
+      idempotencyKey: durableKey,
+      directSale: {
+        items: input.items,
+        date: input.date,
+        division: input.division || 'primary',
+        notes: input.notes || null,
+        reference: input.reference || null,
+      },
     });
-  }
 
-  return orderId;
+    if (!result.orderId) {
+      throw new Error('Server committed direct sale without returning an orderId.');
+    }
+
+    return result.orderId;
+  } catch (err: any) {
+    console.error('[DirectSale] Atomic direct sale recording failed:', err);
+    throw new Error(err?.message || 'Failed to record direct sale on the trusted server.');
+  }
 }
 
 // Pricing
@@ -1328,6 +1314,9 @@ export function subscribeToRegions(
 // Trash System Restoration & Permanent Delete
 export async function restoreFromTrash(trashDocId: string, trashData: any) {
   enforceAdmin();
+  if (trashData.originalCollection === 'payments') {
+    throw new Error('Direct restoration of payments is prohibited. Use payment correction (callCorrectPayment) or record a new payment to maintain authoritative ledger and balance integrity.');
+  }
   try {
     const batch = writeBatch(db);
 
@@ -1388,21 +1377,69 @@ export async function restoreFromTrash(trashDocId: string, trashData: any) {
           batch.delete(lDoc.ref);
         });
       }
-    } else if (trashData.originalCollection === 'payments' && trashData.originalData?.clientId && trashData.originalData.clientId !== 'direct') {
-      // Find and restore the associated ledger credit from trash
-      const lTrashQuery = query(
-        collection(db, 'trash'), 
-        where('originalCollection', '==', 'ledger'),
-        where('originalData.type', '==', 'payment'),
-        where('originalData.paymentId', '==', trashDocId)
-      );
-      const lTrashSnap = await getDocs(lTrashQuery);
-      lTrashSnap.forEach((lDoc) => {
-        const lData = lDoc.data();
-        const lRef = doc(db, 'ledger', lData.originalDocumentId);
-        batch.set(lRef, lData.originalData);
-        batch.delete(lDoc.ref);
-      });
+    } else if (trashData.originalCollection === 'payments') {
+      if (trashData.originalData?.clientId && trashData.originalData.clientId !== 'direct') {
+        // Find and restore the associated ledger credit from trash
+        const lTrashQuery = query(
+          collection(db, 'trash'), 
+          where('originalCollection', '==', 'ledger'),
+          where('originalData.type', '==', 'payment'),
+          where('originalData.paymentId', '==', trashDocId)
+        );
+        const lTrashSnap = await getDocs(lTrashQuery);
+        lTrashSnap.forEach((lDoc) => {
+          const lData = lDoc.data();
+          const lRef = doc(db, 'ledger', lData.originalDocumentId);
+          batch.set(lRef, lData.originalData);
+          batch.delete(lDoc.ref);
+        });
+      }
+
+      // If this payment was applied against an invoice/order, re-apply its contribution to the order document
+      if (trashData.originalData?.invoiceId) {
+        try {
+          const orderRef = doc(db, COLLECTIONS.ORDERS, trashData.originalData.invoiceId);
+          const orderSnap = await getDoc(orderRef);
+          if (orderSnap.exists()) {
+            const oData = orderSnap.data();
+            const reApplied = Number(trashData.originalData.appliedAmount !== undefined ? trashData.originalData.appliedAmount : (trashData.originalData.amount || 0));
+            const currentPaid = Number(oData.paidAmount || 0);
+            const newPaid = round2(currentPaid + reApplied);
+            const netDue = Number(oData.netDue !== undefined ? oData.netDue : (oData.total || 0));
+            const newStatus = newPaid >= netDue - 0.01 ? 'paid' : (newPaid > 0.01 ? 'partial' : 'pending');
+            batch.update(orderRef, {
+              paidAmount: newPaid,
+              paymentStatus: newStatus,
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        } catch (ordErr) {
+          console.warn('[Restore] Could not update order on payment restore:', ordErr);
+        }
+      }
+
+      // If this payment also settled a counterpart division order, re-apply its contribution too
+      if (trashData.originalData?.otherInvoiceId && Number(trashData.originalData.appliedToOtherBill) > 0) {
+        try {
+          const otherRef = doc(db, COLLECTIONS.ORDERS, trashData.originalData.otherInvoiceId);
+          const otherSnap = await getDoc(otherRef);
+          if (otherSnap.exists()) {
+            const otherData = otherSnap.data();
+            const otherReApplied = Number(trashData.originalData.appliedToOtherBill);
+            const otherCurrentPaid = Number(otherData.paidAmount || 0);
+            const otherNewPaid = round2(otherCurrentPaid + otherReApplied);
+            const otherNetDue = Number(otherData.netDue !== undefined ? otherData.netDue : (otherData.total || 0));
+            const otherNewStatus = otherNewPaid >= otherNetDue - 0.01 ? 'paid' : (otherNewPaid > 0.01 ? 'partial' : 'pending');
+            batch.update(otherRef, {
+              paidAmount: otherNewPaid,
+              paymentStatus: otherNewStatus,
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        } catch (otherErr) {
+          console.warn('[Restore] Could not update counterpart order on payment restore:', otherErr);
+        }
+      }
     }
 
     await batch.commit();

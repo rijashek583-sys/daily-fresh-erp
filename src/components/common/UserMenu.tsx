@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
-import { LogOut, User, Settings as SettingsIcon } from 'lucide-react';
+import { LogOut, User, Settings as SettingsIcon, RefreshCw } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { Avatar } from '../ui';
 import { useNavigate } from 'react-router-dom';
+import { triggerAppUpdateCheck } from '../../services/appUpdateService';
 
 export default function UserMenu() {
   const [open, setOpen] = useState(false);
@@ -57,8 +58,23 @@ export default function UserMenu() {
           )}
 
           <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              triggerAppUpdateCheck();
+            }}
+            className="w-full flex items-center gap-3 px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
+            id="user-menu-check-updates-button"
+          >
+            <RefreshCw className="w-4 h-4 text-gray-400" />
+            Check for Updates
+          </button>
+
+          <div className="h-px bg-gray-100 dark:bg-white/[0.05] my-1" />
+
+          <button
             onClick={() => { setOpen(false); logout(); navigate('/login'); }}
-            className="w-full flex items-center gap-3 px-5 py-2.5 text-sm font-bold text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
+            className="w-full flex items-center gap-3 px-5 py-2.5 text-sm font-bold text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors cursor-pointer"
           >
             <LogOut className="w-4 h-4" />
             Sign out

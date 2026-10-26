@@ -3,9 +3,10 @@ import {
   Users, UserCheck, CreditCard, Search, Calendar, MapPin,
   Plus, CheckCircle2, Clock, Smartphone, Banknote, Building,
   ArrowRight, Shield, UserX, AlertCircle, RefreshCw, Eye,
-  KeyRound, EyeOff
+  KeyRound, EyeOff, CalendarRange, Filter, BarChart3, ChevronDown,
+  ChevronUp, Layers, Download
 } from 'lucide-react';
-import { format, isToday } from 'date-fns';
+import { format, subDays, startOfMonth } from 'date-fns';
 import { toast } from 'sonner';
 import { useDataStore } from '../../stores/dataStore';
 import { useDivisionStore } from '../../stores/divisionStore';
@@ -18,6 +19,7 @@ import {
 } from '../../services/staffService';
 import { Button, Card, Badge, PageHeader, Avatar } from '../../components/ui';
 import { formatCurrency, cn } from '../../lib/utils';
+import { downloadStaffCollectionsCsv } from '../../lib/csvExport';
 import { Link } from 'react-router-dom';
 
 const methodIcon: Record<PaymentMethod, React.ElementType> = {
@@ -41,15 +43,22 @@ export default function StaffPage() {
   const [staffList, setStaffList] = useState<User[]>([]);
   const [loadingStaff, setLoadingStaff] = useState(true);
 
-  // Active view tab
-  const [currentTab, setCurrentTab] = useState<'payments' | 'staff'>('payments');
+  // Active view tab: payments | performance | staff
+  const [currentTab, setCurrentTab] = useState<'payments' | 'performance' | 'staff'>('payments');
 
   // Filters
   const [selectedStaffFilter, setSelectedStaffFilter] = useState<string>('all');
   const [selectedRegionFilter, setSelectedRegionFilter] = useState<string>('all');
+  const [selectedDivisionFilter, setSelectedDivisionFilter] = useState<'all' | 'primary' | 'bakery'>('all');
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<'all' | 'client' | 'direct'>('all');
   const [search, setSearch] = useState<string>('');
-  const [dateFilter, setDateFilter] = useState<string>('');
+
+  // Date Filters: Single Date vs Date Range
+  const [dateMode, setDateMode] = useState<'all' | 'single' | 'range'>('all');
+  const [singleDate, setSingleDate] = useState<string>('');
+  const [dateFrom, setDateFrom] = useState<string>('');
+  const [dateTo, setDateTo] = useState<string>('');
+  const [showDailyBreakdown, setShowDailyBreakdown] = useState<boolean>(false);
 
   // Add staff modal state
   const [addModalOpen, setAddModalOpen] = useState(false);
@@ -99,7 +108,7 @@ export default function StaffPage() {
     return map;
   }, [orders]);
 
-  // Filter payments by division & exclude trashed
+  // Filter payments by activeDivision store & exclude trashed records
   const validPayments = useMemo(() => {
     return payments.filter((p) => {
       if (p.deletedAt) return false;
@@ -145,9 +154,9 @@ export default function StaffPage() {
     if (!raw) return { raw: '', display: '—' };
     try {
       const d = new Date(raw.length === 10 ? `${raw}T12:00:00` : raw);
-      return { raw, display: format(d, 'dd MMM yyyy') };
+      return { raw: raw.substring(0, 10), display: format(d, 'dd MMM yyyy') };
     } catch {
-      return { raw, display: raw };
+      return { raw: raw.substring(0, 10), display: raw };
     }
   };
 
@@ -184,6 +193,20 @@ export default function StaffPage() {
     return Array.from(set).sort();
   }, [clients, validPayments]);
 
+  // Helper to check if payment matches date filter
+  const isDateMatch = (rawDate: string): boolean => {
+    if (dateMode === 'single') {
+      if (!singleDate) return true;
+      return rawDate === singleDate;
+    }
+    if (dateMode === 'range') {
+      if (dateFrom && rawDate < dateFrom) return false;
+      if (dateTo && rawDate > dateTo) return false;
+      return true;
+    }
+    return true;
+  };
+
   // Filtered Payments List
   const filteredPayments = useMemo(() => {
     return validPayments
@@ -193,6 +216,12 @@ export default function StaffPage() {
         const clientName = getPaymentClientName(p);
         const region = getPaymentRegion(p);
         const pDateInfo = getPaymentDate(p);
+
+        // Division filter
+        if (selectedDivisionFilter !== 'all') {
+          const div = p.division === 'bakery' ? 'bakery' : 'primary';
+          if (div !== selectedDivisionFilter) return false;
+        }
 
         // Order type filter
         if (selectedTypeFilter !== 'all') {
@@ -215,10 +244,9 @@ export default function StaffPage() {
         }
 
         // Date filter
-        if (dateFilter) {
-          if (pDateInfo.raw !== dateFilter && !p.createdAt?.startsWith(dateFilter)) {
-            return false;
-          }
+        const rawDate = pDateInfo.raw || (p.createdAt ? p.createdAt.substring(0, 10) : '');
+        if (!isDateMatch(rawDate)) {
+          return false;
         }
 
         // Search text
@@ -241,10 +269,14 @@ export default function StaffPage() {
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [
     validPayments,
+    selectedDivisionFilter,
     selectedTypeFilter,
     selectedStaffFilter,
     selectedRegionFilter,
-    dateFilter,
+    dateMode,
+    singleDate,
+    dateFrom,
+    dateTo,
     search,
     staffList,
     clientMap
@@ -253,44 +285,87 @@ export default function StaffPage() {
   // Aggregate Metrics
   const todayStr = format(new Date(), 'yyyy-MM-dd');
 
+  // 1. Today's collections and payments across all staff
+  const todayPayments = useMemo(() => {
+    return validPayments.filter((p) => {
+      const dateStr = p.paymentDate || p.billDate || (p.createdAt ? p.createdAt.substring(0, 10) : '');
+      return dateStr === todayStr || (p.createdAt && p.createdAt.startsWith(todayStr));
+    });
+  }, [validPayments, todayStr]);
+
+  const todayStaffCollectionsAmount = useMemo(() => {
+    return todayPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+  }, [todayPayments]);
+
+  const todayPaymentsCount = todayPayments.length;
+
+  // 2. All-time total collections and payments across all staff
   const totalStaffCollectionsAmount = useMemo(() => {
     return validPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
   }, [validPayments]);
 
-  const todayStaffCollectionsAmount = useMemo(() => {
-    return validPayments
-      .filter((p) => {
-        const dateStr = p.paymentDate || p.billDate || (p.createdAt ? p.createdAt.substring(0, 10) : '');
-        return dateStr === todayStr || (p.createdAt && p.createdAt.startsWith(todayStr));
-      })
-      .reduce((sum, p) => sum + (p.amount || 0), 0);
-  }, [validPayments, todayStr]);
+  const allTimePaymentsCount = validPayments.length;
 
-  // Staff summary performance metrics (for cards / breakdown)
+  // 3. Filtered collection amounts
+  const filteredTotalAmount = useMemo(() => {
+    return filteredPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+  }, [filteredPayments]);
+
+  const filteredPrimaryAmount = useMemo(() => {
+    return filteredPayments
+      .filter((p) => p.division !== 'bakery')
+      .reduce((sum, p) => sum + (p.amount || 0), 0);
+  }, [filteredPayments]);
+
+  const filteredBakeryAmount = useMemo(() => {
+    return filteredPayments
+      .filter((p) => p.division === 'bakery')
+      .reduce((sum, p) => sum + (p.amount || 0), 0);
+  }, [filteredPayments]);
+
+  // 4. Staff-wise metrics (Daily & All-time totals, payment counts, division breakdown)
   const staffMetricsMap = useMemo(() => {
     const map = new Map<
       string,
-      { totalAmount: number; todayAmount: number; count: number; lastPaymentDate?: string }
+      {
+        totalAmount: number;
+        totalCount: number;
+        todayAmount: number;
+        todayCount: number;
+        primaryAmount: number;
+        bakeryAmount: number;
+        lastPaymentDate?: string;
+      }
     >();
 
     validPayments.forEach((p) => {
       const sName = getPaymentStaffName(p).toLowerCase();
       const existing = map.get(sName) || {
         totalAmount: 0,
+        totalCount: 0,
         todayAmount: 0,
-        count: 0,
+        todayCount: 0,
+        primaryAmount: 0,
+        bakeryAmount: 0,
         lastPaymentDate: undefined,
       };
 
       const amt = p.amount || 0;
-      const isTodayTx =
-        (p.paymentDate && p.paymentDate === todayStr) ||
-        (p.billDate && p.billDate === todayStr) ||
-        (p.createdAt && p.createdAt.startsWith(todayStr));
+      const rawDate = p.paymentDate || p.billDate || (p.createdAt ? p.createdAt.substring(0, 10) : '');
+      const isTodayTx = rawDate === todayStr || (p.createdAt && p.createdAt.startsWith(todayStr));
 
       existing.totalAmount += amt;
-      existing.count += 1;
-      if (isTodayTx) existing.todayAmount += amt;
+      existing.totalCount += 1;
+      if (isTodayTx) {
+        existing.todayAmount += amt;
+        existing.todayCount += 1;
+      }
+
+      if (p.division === 'bakery') {
+        existing.bakeryAmount += amt;
+      } else {
+        existing.primaryAmount += amt;
+      }
 
       const pDate = p.paymentDate || p.billDate || p.createdAt;
       if (
@@ -306,6 +381,136 @@ export default function StaffPage() {
 
     return map;
   }, [validPayments, todayStr]);
+
+  // 5. Date-wise Daily Aggregate Breakdown (within the active filters)
+  const dateWiseBreakdown = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        date: string;
+        displayDate: string;
+        count: number;
+        totalAmount: number;
+        primaryAmount: number;
+        bakeryAmount: number;
+        staffSet: Set<string>;
+      }
+    >();
+
+    filteredPayments.forEach((p) => {
+      const rawDate = (p.paymentDate || p.billDate || (p.createdAt ? p.createdAt.substring(0, 10) : '')).substring(0, 10);
+      const dateInfo = getPaymentDate(p);
+      const existing = map.get(rawDate) || {
+        date: rawDate,
+        displayDate: dateInfo.display,
+        count: 0,
+        totalAmount: 0,
+        primaryAmount: 0,
+        bakeryAmount: 0,
+        staffSet: new Set<string>(),
+      };
+
+      existing.count += 1;
+      existing.totalAmount += (p.amount || 0);
+      if (p.division === 'bakery') {
+        existing.bakeryAmount += (p.amount || 0);
+      } else {
+        existing.primaryAmount += (p.amount || 0);
+      }
+      existing.staffSet.add(getPaymentStaffName(p));
+      map.set(rawDate, existing);
+    });
+
+    return Array.from(map.values()).sort((a, b) => b.date.localeCompare(a.date));
+  }, [filteredPayments]);
+
+  // Date preset helper functions
+  const handleSetPreset = (preset: 'all' | 'today' | 'yesterday' | 'last7' | 'thisMonth') => {
+    if (preset === 'all') {
+      setDateMode('all');
+      setSingleDate('');
+      setDateFrom('');
+      setDateTo('');
+    } else if (preset === 'today') {
+      setDateMode('single');
+      setSingleDate(todayStr);
+      setDateFrom('');
+      setDateTo('');
+    } else if (preset === 'yesterday') {
+      const yDate = format(subDays(new Date(), 1), 'yyyy-MM-dd');
+      setDateMode('single');
+      setSingleDate(yDate);
+      setDateFrom('');
+      setDateTo('');
+    } else if (preset === 'last7') {
+      const start7 = format(subDays(new Date(), 6), 'yyyy-MM-dd');
+      setDateMode('range');
+      setDateFrom(start7);
+      setDateTo(todayStr);
+      setSingleDate('');
+    } else if (preset === 'thisMonth') {
+      const startM = format(startOfMonth(new Date()), 'yyyy-MM-dd');
+      setDateMode('range');
+      setDateFrom(startM);
+      setDateTo(todayStr);
+      setSingleDate('');
+    }
+  };
+
+  const isFilterActive =
+    selectedStaffFilter !== 'all' ||
+    selectedRegionFilter !== 'all' ||
+    selectedDivisionFilter !== 'all' ||
+    selectedTypeFilter !== 'all' ||
+    dateMode !== 'all' ||
+    singleDate !== '' ||
+    dateFrom !== '' ||
+    dateTo !== '' ||
+    search.trim() !== '';
+
+  const handleClearFilters = () => {
+    setSelectedStaffFilter('all');
+    setSelectedRegionFilter('all');
+    setSelectedDivisionFilter('all');
+    setSelectedTypeFilter('all');
+    setDateMode('all');
+    setSingleDate('');
+    setDateFrom('');
+    setDateTo('');
+    setSearch('');
+  };
+
+  // Export Staff Collection CSV (Feature 3A)
+  const handleExportCsv = () => {
+    if (filteredPayments.length === 0) {
+      toast.info('No staff payments to export for the selected filters.');
+      return;
+    }
+
+    const dateLabel =
+      dateMode === 'single' && singleDate
+        ? singleDate
+        : dateMode === 'range' && (dateFrom || dateTo)
+        ? `${dateFrom || 'start'}_to_${dateTo || 'end'}`
+        : 'All_Time';
+
+    const staffFilterLabel =
+      selectedStaffFilter === 'all'
+        ? 'All Staff & Collectors'
+        : selectedStaffFilter;
+
+    const result = downloadStaffCollectionsCsv(filteredPayments, {
+      dateLabel,
+      divisionFilter: selectedDivisionFilter,
+      staffFilterLabel,
+      staffUsers: staffList,
+      filePrefix: 'Staff_Collections',
+    });
+
+    toast.success(
+      `Exported ${result.recordCount} collection receipts (${formatCurrency(result.totalCollected)}).`
+    );
+  };
 
   // Handle staff account creation
   const handleCreateStaff = async (e: React.FormEvent) => {
@@ -380,7 +585,7 @@ export default function StaffPage() {
       });
 
       toast.success(
-        `Password reset link sent to ${selectedStaffForPassword.email} for staff member ${selectedStaffForPassword.name}.`
+        `Password updated successfully for staff member ${selectedStaffForPassword.name}.`
       );
       setResetModalOpen(false);
       setSelectedStaffForPassword(null);
@@ -425,8 +630,8 @@ export default function StaffPage() {
     <div className="max-w-7xl mx-auto pb-16">
       {/* ── Page Header ── */}
       <PageHeader
-        title="Staff Section"
-        description="Monitor staff recorded payments, shop visits, and manage staff accounts."
+        title="Staff Section & Collection Reports"
+        description="Monitor staff recorded payments, analyze date-wise collection totals, and manage staff accounts."
         actions={
           <Button
             size="md"
@@ -441,22 +646,9 @@ export default function StaffPage() {
         }
       />
 
-      {/* ── Summary Stats ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <Card className="flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
-            <CheckCircle2 className="w-6 h-6" />
-          </div>
-          <div>
-            <p className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
-              Total Staff Collections
-            </p>
-            <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
-              {formatCurrency(totalStaffCollectionsAmount)}
-            </p>
-          </div>
-        </Card>
-
+      {/* ── Executive Summary Metric Cards ── */}
+      <div className="grid grid-cols-1 min-[420px]:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
+        {/* Card 1: Today's Collections across all staff */}
         <Card className="flex items-center gap-4">
           <div className="w-12 h-12 rounded-2xl bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
             <Clock className="w-6 h-6" />
@@ -468,9 +660,49 @@ export default function StaffPage() {
             <p className="text-2xl font-bold text-blue-600 dark:text-blue-400 tabular-nums">
               {formatCurrency(todayStaffCollectionsAmount)}
             </p>
+            <p className="text-[11px] text-gray-400 font-medium mt-0.5">
+              {todayPaymentsCount} payment{todayPaymentsCount === 1 ? '' : 's'} recorded today
+            </p>
           </div>
         </Card>
 
+        {/* Card 2: All-Time Collections across all staff */}
+        <Card className="flex items-center gap-4">
+          <div className="w-12 h-12 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+            <CheckCircle2 className="w-6 h-6" />
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+              All-Time Collections
+            </p>
+            <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
+              {formatCurrency(totalStaffCollectionsAmount)}
+            </p>
+            <p className="text-[11px] text-gray-400 font-medium mt-0.5">
+              {allTimePaymentsCount} total payments across staff
+            </p>
+          </div>
+        </Card>
+
+        {/* Card 3: Today's Payment Records Count */}
+        <Card className="flex items-center gap-4">
+          <div className="w-12 h-12 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+            <CreditCard className="w-6 h-6" />
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+              Today's Payment Count
+            </p>
+            <p className="text-2xl font-bold text-[var(--color-text-main)] tabular-nums">
+              {todayPaymentsCount}
+            </p>
+            <p className="text-[11px] text-gray-400 font-medium mt-0.5">
+              {allTimePaymentsCount} recorded all-time
+            </p>
+          </div>
+        </Card>
+
+        {/* Card 4: Active Staff Members */}
         <Card className="flex items-center gap-4">
           <div className="w-12 h-12 rounded-2xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
             <Users className="w-6 h-6" />
@@ -482,32 +714,21 @@ export default function StaffPage() {
             <p className="text-2xl font-bold text-[var(--color-text-main)] tabular-nums">
               {staffList.filter((s) => s.status === 'active').length || allKnownStaff.length}
             </p>
-          </div>
-        </Card>
-
-        <Card className="flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl bg-red-50 dark:bg-red-950/40 text-[var(--color-primary)] flex items-center justify-center shrink-0">
-            <CreditCard className="w-6 h-6" />
-          </div>
-          <div>
-            <p className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
-              Staff Payments Recorded
-            </p>
-            <p className="text-2xl font-bold text-[var(--color-text-main)] tabular-nums">
-              {validPayments.length}
+            <p className="text-[11px] text-gray-400 font-medium mt-0.5">
+              {allKnownStaff.length} total staff profiles
             </p>
           </div>
         </Card>
       </div>
 
-      {/* ── Tab Switcher: Payments vs Staff Accounts ── */}
+      {/* ── Tab Switcher: Payments vs Staff Performance vs Staff Accounts ── */}
       <div className="flex items-center justify-between gap-4 mb-6">
-        <div className="flex p-1 bg-gray-100 dark:bg-gray-800/80 rounded-2xl shadow-xs">
+        <div className="flex p-1 bg-gray-100 dark:bg-gray-800/80 rounded-2xl shadow-xs overflow-x-auto max-w-full no-scrollbar">
           <button
             type="button"
             onClick={() => setCurrentTab('payments')}
             className={cn(
-              'px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2',
+              'px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap',
               currentTab === 'payments'
                 ? 'bg-white dark:bg-gray-900 text-[var(--color-primary)] shadow-sm'
                 : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-200'
@@ -529,16 +750,40 @@ export default function StaffPage() {
 
           <button
             type="button"
+            onClick={() => setCurrentTab('performance')}
+            className={cn(
+              'px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap',
+              currentTab === 'performance'
+                ? 'bg-white dark:bg-gray-900 text-[var(--color-primary)] shadow-sm'
+                : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-200'
+            )}
+          >
+            <BarChart3 className="w-3.5 h-3.5" />
+            <span>Staff Performance Reports</span>
+            <span
+              className={cn(
+                'text-[10px] px-1.5 py-0.5 rounded-full font-bold',
+                currentTab === 'performance'
+                  ? 'bg-red-50 text-[var(--color-primary)] dark:bg-red-950/60'
+                  : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
+              )}
+            >
+              {allKnownStaff.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setCurrentTab('staff')}
             className={cn(
-              'px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2',
+              'px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap',
               currentTab === 'staff'
                 ? 'bg-white dark:bg-gray-900 text-[var(--color-primary)] shadow-sm'
                 : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-200'
             )}
           >
             <UserCheck className="w-3.5 h-3.5" />
-            <span>Staff Accounts & Performance</span>
+            <span>Staff Accounts & Access</span>
             <span
               className={cn(
                 'text-[10px] px-1.5 py-0.5 rounded-full font-bold',
@@ -547,16 +792,16 @@ export default function StaffPage() {
                   : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
               )}
             >
-              {allKnownStaff.length}
+              {staffList.length}
             </span>
           </button>
         </div>
       </div>
 
-      {/* ── TAB 1: STAFF RECORDED PAYMENTS ── */}
+      {/* ── TAB 1: STAFF RECORDED PAYMENTS & DATE-WISE REPORTS ── */}
       {currentTab === 'payments' && (
         <div className="space-y-6">
-          {/* Quick Staff Filter Chips */}
+          {/* Quick Staff Filter Chips with Today and Total metrics */}
           <div className="flex items-center gap-2 overflow-x-auto pb-1 custom-scrollbar">
             <button
               type="button"
@@ -575,6 +820,7 @@ export default function StaffPage() {
             {allKnownStaff.map((staff) => {
               const metrics = staffMetricsMap.get(staff.name.toLowerCase());
               const totalAmt = metrics ? metrics.totalAmount : 0;
+              const todayAmt = metrics ? metrics.todayAmount : 0;
               const isSelected =
                 selectedStaffFilter === staff.id ||
                 selectedStaffFilter.toLowerCase() === staff.name.toLowerCase();
@@ -592,6 +838,17 @@ export default function StaffPage() {
                   )}
                 >
                   <span>{staff.name}</span>
+                  {todayAmt > 0 && (
+                    <span
+                      className={cn(
+                        'text-[10px] px-1.5 py-0.5 rounded-md font-semibold',
+                        isSelected ? 'bg-white/20 text-white' : 'bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-400'
+                      )}
+                      title="Today's Collections"
+                    >
+                      Today: {formatCurrency(todayAmt)}
+                    </span>
+                  )}
                   <span
                     className={cn(
                       'text-[10px] px-1.5 py-0.5 rounded-md font-semibold',
@@ -599,6 +856,7 @@ export default function StaffPage() {
                         ? 'bg-white/20 text-white'
                         : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400'
                     )}
+                    title="All-Time Collections"
                   >
                     {formatCurrency(totalAmt)}
                   </span>
@@ -607,22 +865,117 @@ export default function StaffPage() {
             })}
           </div>
 
-          {/* Filter Bar */}
-          <Card className="p-4">
-            <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
-              {/* Search */}
-              <div className="relative">
+          {/* Comprehensive Filter Card with Date Range & Division */}
+          <Card className="p-4 space-y-3.5">
+            {/* Quick Date Presets */}
+            <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-gray-100 dark:border-gray-800">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mr-1 flex items-center gap-1">
+                  <CalendarRange className="w-3.5 h-3.5 text-gray-400" />
+                  Date Presets:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleSetPreset('all')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all',
+                    dateMode === 'all'
+                      ? 'bg-[var(--color-primary)] text-white'
+                      : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200'
+                  )}
+                >
+                  All Time
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSetPreset('today')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all',
+                    dateMode === 'single' && singleDate === todayStr
+                      ? 'bg-[var(--color-primary)] text-white'
+                      : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200'
+                  )}
+                >
+                  Today
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSetPreset('yesterday')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all',
+                    dateMode === 'single' && singleDate === format(subDays(new Date(), 1), 'yyyy-MM-dd')
+                      ? 'bg-[var(--color-primary)] text-white'
+                      : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200'
+                  )}
+                >
+                  Yesterday
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSetPreset('last7')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all',
+                    dateMode === 'range' && dateTo === todayStr && dateFrom === format(subDays(new Date(), 6), 'yyyy-MM-dd')
+                      ? 'bg-[var(--color-primary)] text-white'
+                      : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200'
+                  )}
+                >
+                  Last 7 Days
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSetPreset('thisMonth')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all',
+                    dateMode === 'range' && dateFrom === format(startOfMonth(new Date()), 'yyyy-MM-dd')
+                      ? 'bg-[var(--color-primary)] text-white'
+                      : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200'
+                  )}
+                >
+                  This Month
+                </button>
+              </div>
+
+              {/* Date Mode Toggle */}
+              <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800/80 p-0.5 rounded-lg text-xs">
+                <button
+                  type="button"
+                  onClick={() => setDateMode('single')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-md font-semibold transition-all',
+                    dateMode === 'single' ? 'bg-white dark:bg-gray-900 text-[var(--color-primary)] shadow-xs' : 'text-gray-500'
+                  )}
+                >
+                  Single Date
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDateMode('range')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-md font-semibold transition-all',
+                    dateMode === 'range' ? 'bg-white dark:bg-gray-900 text-[var(--color-primary)] shadow-xs' : 'text-gray-500'
+                  )}
+                >
+                  From – To Range
+                </button>
+              </div>
+            </div>
+
+            {/* Main Filters Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+              {/* 1. Search */}
+              <div className="relative lg:col-span-2">
                 <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"
-                  placeholder="Search staff, shop, region, ref..."
+                  placeholder="Search staff, client, region, ref..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   className="w-full pl-9 pr-4 py-2 text-xs font-medium rounded-xl border border-gray-200 dark:border-gray-800 bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] transition-all"
                 />
               </div>
 
-              {/* Staff Select */}
+              {/* 2. Staff Select */}
               <div className="relative">
                 <Users className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <select
@@ -639,20 +992,21 @@ export default function StaffPage() {
                 </select>
               </div>
 
-              {/* Order Type Select */}
+              {/* 3. Division Filter */}
               <div className="relative">
+                <Layers className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <select
-                  value={selectedTypeFilter}
-                  onChange={(e) => setSelectedTypeFilter(e.target.value as 'all' | 'client' | 'direct')}
-                  className="w-full px-3 py-2 text-xs font-medium rounded-xl border border-gray-200 dark:border-gray-800 bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] transition-all appearance-none cursor-pointer"
+                  value={selectedDivisionFilter}
+                  onChange={(e) => setSelectedDivisionFilter(e.target.value as 'all' | 'primary' | 'bakery')}
+                  className="w-full pl-9 pr-4 py-2 text-xs font-medium rounded-xl border border-gray-200 dark:border-gray-800 bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] transition-all appearance-none cursor-pointer"
                 >
-                  <option value="all">All Transactions</option>
-                  <option value="client">Client Orders</option>
-                  <option value="direct">Direct Sales</option>
+                  <option value="all">All Divisions</option>
+                  <option value="primary">Primary Foods</option>
+                  <option value="bakery">Bakery Foods</option>
                 </select>
               </div>
 
-              {/* Region Select */}
+              {/* 4. Region Select */}
               <div className="relative">
                 <MapPin className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <select
@@ -669,43 +1023,216 @@ export default function StaffPage() {
                 </select>
               </div>
 
-              {/* Date Filter */}
+              {/* 5. Order Type Select */}
               <div className="relative">
-                <Calendar className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input
-                  type="date"
-                  value={dateFilter}
-                  onChange={(e) => setDateFilter(e.target.value)}
-                  className="w-full pl-9 pr-4 py-2 text-xs font-medium rounded-xl border border-gray-200 dark:border-gray-800 bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] transition-all"
-                />
+                <select
+                  value={selectedTypeFilter}
+                  onChange={(e) => setSelectedTypeFilter(e.target.value as 'all' | 'client' | 'direct')}
+                  className="w-full px-3 py-2 text-xs font-medium rounded-xl border border-gray-200 dark:border-gray-800 bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] transition-all appearance-none cursor-pointer"
+                >
+                  <option value="all">All Transactions</option>
+                  <option value="client">Client Orders</option>
+                  <option value="direct">Direct Sales</option>
+                </select>
               </div>
             </div>
 
-            {(selectedStaffFilter !== 'all' ||
-              selectedRegionFilter !== 'all' ||
-              selectedTypeFilter !== 'all' ||
-              dateFilter ||
-              search) && (
-              <div className="flex items-center justify-between pt-3 mt-3 border-t border-gray-100 dark:border-gray-800 text-xs">
+            {/* Date Inputs based on Date Mode */}
+            {dateMode === 'single' && (
+              <div className="flex items-center gap-3 pt-2">
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-gray-400" />
+                  <span className="text-xs font-bold text-gray-600 dark:text-gray-300">Select Date:</span>
+                </div>
+                <input
+                  type="date"
+                  value={singleDate}
+                  onChange={(e) => setSingleDate(e.target.value)}
+                  className="px-3 py-1.5 text-xs font-medium rounded-xl border border-gray-200 dark:border-gray-800 bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] transition-all"
+                />
+                {singleDate && (
+                  <button
+                    type="button"
+                    onClick={() => setSingleDate('')}
+                    className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                  >
+                    Clear Date
+                  </button>
+                )}
+              </div>
+            )}
+
+            {dateMode === 'range' && (
+              <div className="flex items-center gap-3 pt-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <CalendarRange className="w-4 h-4 text-gray-400" />
+                  <span className="text-xs font-bold text-gray-600 dark:text-gray-300">Date Range:</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-gray-400 font-medium">From:</span>
+                  <input
+                    type="date"
+                    value={dateFrom}
+                    onChange={(e) => setDateFrom(e.target.value)}
+                    className="px-3 py-1.5 text-xs font-medium rounded-xl border border-gray-200 dark:border-gray-800 bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] transition-all"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-gray-400 font-medium">To:</span>
+                  <input
+                    type="date"
+                    value={dateTo}
+                    onChange={(e) => setDateTo(e.target.value)}
+                    className="px-3 py-1.5 text-xs font-medium rounded-xl border border-gray-200 dark:border-gray-800 bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] transition-all"
+                  />
+                </div>
+                {(dateFrom || dateTo) && (
+                  <button
+                    type="button"
+                    onClick={() => { setDateFrom(''); setDateTo(''); }}
+                    className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                  >
+                    Clear Range
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Clear all filters row */}
+            {isFilterActive && (
+              <div className="flex items-center justify-between pt-2.5 border-t border-gray-100 dark:border-gray-800 text-xs">
                 <span className="text-gray-400 font-medium">
-                  Showing {filteredPayments.length} of {validPayments.length} payments
+                  Showing <strong>{filteredPayments.length}</strong> of <strong>{validPayments.length}</strong> payments
                 </span>
                 <button
                   type="button"
-                  onClick={() => {
-                    setSelectedStaffFilter('all');
-                    setSelectedRegionFilter('all');
-                    setSelectedTypeFilter('all');
-                    setDateFilter('');
-                    setSearch('');
-                  }}
+                  onClick={handleClearFilters}
                   className="text-[var(--color-primary)] hover:underline font-semibold"
                 >
-                  Clear Filters
+                  Reset All Filters
                 </button>
               </div>
             )}
           </Card>
+
+          {/* ── Real-Time Date-Wise Collection Totals Banner ── */}
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-500/10 via-blue-500/10 to-transparent border border-emerald-500/20 flex flex-wrap items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <Badge variant="success">Collection Summary</Badge>
+                <span className="text-xs font-bold text-gray-500 dark:text-gray-400">
+                  {dateMode === 'single' && singleDate
+                    ? `Date: ${singleDate}`
+                    : dateMode === 'range' && (dateFrom || dateTo)
+                    ? `Period: ${dateFrom || 'Start'} to ${dateTo || 'End'}`
+                    : 'All Active Records'}
+                </span>
+              </div>
+              <div className="flex items-baseline gap-3 flex-wrap">
+                <p className="text-2xl font-extrabold text-emerald-600 dark:text-emerald-400 tabular-nums">
+                  {formatCurrency(filteredTotalAmount)}
+                </p>
+                <span className="text-xs text-gray-500 font-medium">
+                  ({filteredPayments.length} payment{filteredPayments.length === 1 ? '' : 's'})
+                </span>
+              </div>
+            </div>
+
+            {/* Division Split */}
+            <div className="flex items-center gap-3">
+              <div className="px-3.5 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200/60 dark:border-blue-900/40 text-center">
+                <p className="text-[10px] uppercase font-bold text-blue-600 dark:text-blue-400">
+                  Primary Foods
+                </p>
+                <p className="text-sm font-extrabold text-blue-700 dark:text-blue-300 tabular-nums">
+                  {formatCurrency(filteredPrimaryAmount)}
+                </p>
+              </div>
+              <div className="px-3.5 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200/60 dark:border-amber-900/40 text-center">
+                <p className="text-[10px] uppercase font-bold text-amber-600 dark:text-amber-400">
+                  Bakery Foods
+                </p>
+                <p className="text-sm font-extrabold text-amber-700 dark:text-amber-300 tabular-nums">
+                  {formatCurrency(filteredBakeryAmount)}
+                </p>
+              </div>
+
+              {dateWiseBreakdown.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowDailyBreakdown(!showDailyBreakdown)}
+                  className="px-3 py-2 rounded-xl text-xs font-bold bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/80 transition-all flex items-center gap-1.5"
+                >
+                  <BarChart3 className="w-3.5 h-3.5" />
+                  <span>Daily Breakdown</span>
+                  {showDailyBreakdown ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={handleExportCsv}
+                className="px-3 py-2 rounded-xl text-xs font-bold bg-white dark:bg-gray-800 border border-emerald-300 dark:border-emerald-800/60 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-all flex items-center gap-1.5 shadow-2xs"
+                title="Download Staff Collections as Excel-compatible CSV"
+              >
+                <Download className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                <span>Download CSV</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Collapsible Date-Wise Aggregate Table */}
+          {showDailyBreakdown && dateWiseBreakdown.length > 0 && (
+            <Card padding={false} className="overflow-hidden border border-emerald-500/20">
+              <div className="p-3 bg-gray-50 dark:bg-gray-900/50 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between">
+                <h4 className="text-xs font-bold text-[var(--color-text-main)] uppercase tracking-wider flex items-center gap-1.5">
+                  <CalendarRange className="w-4 h-4 text-emerald-600" />
+                  Day-by-Day Collection Breakdown ({dateWiseBreakdown.length} days)
+                </h4>
+                <span className="text-[11px] text-gray-400">Sorted most recent first</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-gray-50/50 dark:bg-gray-900/30 border-b border-gray-100 dark:border-gray-800 text-[10px] font-bold text-gray-500 uppercase tracking-wider text-left">
+                      <th className="px-4 py-2.5">Date</th>
+                      <th className="px-4 py-2.5 text-center">Payments</th>
+                      <th className="px-4 py-2.5 text-right">Primary Foods</th>
+                      <th className="px-4 py-2.5 text-right">Bakery Foods</th>
+                      <th className="px-4 py-2.5 text-right font-extrabold">Total Collections</th>
+                      <th className="px-4 py-2.5">Active Staff</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60">
+                    {dateWiseBreakdown.map((row) => (
+                      <tr key={row.date} className="hover:bg-gray-50/60 dark:hover:bg-gray-800/30">
+                        <td className="px-4 py-2.5 font-bold text-[var(--color-text-main)]">
+                          {row.displayDate}
+                        </td>
+                        <td className="px-4 py-2.5 text-center font-semibold">
+                          <span className="px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
+                            {row.count}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-semibold text-blue-600 dark:text-blue-400 tabular-nums">
+                          {formatCurrency(row.primaryAmount)}
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-semibold text-amber-600 dark:text-amber-400 tabular-nums">
+                          {formatCurrency(row.bakeryAmount)}
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-extrabold text-emerald-600 dark:text-emerald-400 tabular-nums text-sm">
+                          {formatCurrency(row.totalAmount)}
+                        </td>
+                        <td className="px-4 py-2.5 text-gray-500">
+                          {Array.from(row.staffSet).join(', ')}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
 
           {/* Payments Table */}
           {filteredPayments.length === 0 ? (
@@ -715,7 +1242,7 @@ export default function StaffPage() {
                 No Payments Found
               </h3>
               <p className="text-xs font-medium text-gray-500 mt-1">
-                No staff payment records matched your selected filters.
+                No staff payment records matched your selected filters or active date range.
               </p>
             </div>
           ) : (
@@ -727,9 +1254,10 @@ export default function StaffPage() {
                       <th className="px-5 py-3.5">Staff Member</th>
                       <th className="px-5 py-3.5">Shop / Client</th>
                       <th className="px-4 py-3.5">Region</th>
+                      <th className="px-4 py-3.5">Division</th>
                       <th className="px-4 py-3.5">Date</th>
                       <th className="px-5 py-3.5 text-right">Amount</th>
-                      <th className="px-5 py-3.5">Payment & Order Details</th>
+                      <th className="px-5 py-3.5">Payment Details</th>
                       <th className="px-4 py-3.5 text-right">Summary Flow</th>
                     </tr>
                   </thead>
@@ -742,13 +1270,14 @@ export default function StaffPage() {
                       const dateInfo = getPaymentDate(p);
                       const Icon = methodIcon[p.method] || Banknote;
                       const linkedOrder = p.invoiceId ? orderMap.get(p.invoiceId) : null;
+                      const div = p.division === 'bakery' ? 'Bakery Foods' : 'Primary Foods';
 
                       return (
                         <tr
                           key={p.id}
                           className="hover:bg-gray-50/60 dark:hover:bg-gray-800/20 transition-colors"
                         >
-                          {/* 1. Which staff recorded it */}
+                          {/* 1. Staff */}
                           <td className="px-5 py-3.5">
                             <div className="flex items-center gap-2.5">
                               <Avatar name={staffName} size="sm" />
@@ -763,7 +1292,7 @@ export default function StaffPage() {
                             </div>
                           </td>
 
-                          {/* 2. Which shop/client */}
+                          {/* 2. Shop / Client */}
                           <td className="px-5 py-3.5">
                             {isDirectSale ? (
                               <div>
@@ -789,24 +1318,31 @@ export default function StaffPage() {
                             )}
                           </td>
 
-                          {/* 3. Which region */}
+                          {/* 3. Region */}
                           <td className="px-4 py-3.5">
                             <Badge variant={isDirectSale ? 'warning' : 'gray'}>
-                              {isDirectSale ? 'Direct Sale / —' : (region || '—')}
+                              {isDirectSale ? 'Direct Sale' : (region || '—')}
                             </Badge>
                           </td>
 
-                          {/* 4. Date */}
+                          {/* 4. Division */}
+                          <td className="px-4 py-3.5">
+                            <Badge variant={p.division === 'bakery' ? 'warning' : 'info'}>
+                              {div}
+                            </Badge>
+                          </td>
+
+                          {/* 5. Date */}
                           <td className="px-4 py-3.5 text-xs font-semibold text-[var(--color-text-muted)] whitespace-nowrap">
                             {dateInfo.display}
                           </td>
 
-                          {/* 5. Amount */}
+                          {/* 6. Amount */}
                           <td className="px-5 py-3.5 text-right font-extrabold text-sm tabular-nums text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
                             {formatCurrency(p.amount)}
                           </td>
 
-                          {/* 6. Payment & order details */}
+                          {/* 7. Payment details */}
                           <td className="px-5 py-3.5">
                             <div className="space-y-1">
                               <div className="flex items-center gap-2 flex-wrap">
@@ -814,13 +1350,6 @@ export default function StaffPage() {
                                   <Icon className="w-3 h-3 text-gray-400" />
                                   {methodLabel[p.method] || p.method}
                                 </span>
-                                {p.division && (
-                                  <Badge
-                                    variant={p.division === 'primary' ? 'info' : 'warning'}
-                                  >
-                                    {p.division}
-                                  </Badge>
-                                )}
                                 {isDirectSale && (
                                   <Badge variant="warning">Direct Sale</Badge>
                                 )}
@@ -849,7 +1378,7 @@ export default function StaffPage() {
                             </div>
                           </td>
 
-                          {/* 7. Summary Flow badge: Anil → Direct Sale → ₹1,300 → 05 Oct 2026 */}
+                          {/* 8. Summary flow */}
                           <td className="px-4 py-3.5 text-right whitespace-nowrap">
                             {isDirectSale ? (
                               <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[11px] font-semibold text-amber-900 dark:text-amber-200">
@@ -864,10 +1393,6 @@ export default function StaffPage() {
                                 <span className="font-bold text-emerald-600 dark:text-emerald-400">
                                   {formatCurrency(p.amount)}
                                 </span>
-                                <span className="text-gray-300 dark:text-gray-600">&rarr;</span>
-                                <span className="text-gray-500">
-                                  {dateInfo.display}
-                                </span>
                               </div>
                             ) : (
                               <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-gray-50 dark:bg-gray-800/80 border border-gray-100 dark:border-gray-800 text-[11px] font-semibold text-gray-600 dark:text-gray-300">
@@ -877,14 +1402,8 @@ export default function StaffPage() {
                                 <span className="text-gray-300 dark:text-gray-600">&rarr;</span>
                                 <span className="truncate max-w-[100px]">{clientName}</span>
                                 <span className="text-gray-300 dark:text-gray-600">&rarr;</span>
-                                <span className="text-gray-400">{region}</span>
-                                <span className="text-gray-300 dark:text-gray-600">&rarr;</span>
                                 <span className="font-bold text-emerald-600 dark:text-emerald-400">
                                   {formatCurrency(p.amount)}
-                                </span>
-                                <span className="text-gray-300 dark:text-gray-600">&rarr;</span>
-                                <span className="text-gray-500">
-                                  {dateInfo.display.replace(/\s\d{4}$/, '')}
                                 </span>
                               </div>
                             )}
@@ -900,7 +1419,122 @@ export default function StaffPage() {
         </div>
       )}
 
-      {/* ── TAB 2: STAFF DIRECTORY & PERFORMANCE ── */}
+      {/* ── TAB 2: STAFF PERFORMANCE & COLLECTIONS REPORT ── */}
+      {currentTab === 'performance' && (
+        <div className="space-y-6">
+          {/* Executive Overview Table */}
+          <Card padding={false} className="overflow-hidden">
+            <div className="p-4 bg-gray-50/70 dark:bg-gray-900/40 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-[var(--color-text-main)]">
+                  Staff-Wise Collection Summary
+                </h3>
+                <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
+                  Daily and all-time collections, payment counts, and division breakdown per staff member.
+                </p>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-gray-50/40 dark:bg-gray-900/20 border-b border-gray-100 dark:border-gray-800 text-[10px] font-bold text-gray-500 uppercase tracking-wider text-left">
+                    <th className="px-5 py-3">Staff Member</th>
+                    <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3 text-right">Today's Collections</th>
+                    <th className="px-4 py-3 text-center">Today's Payments</th>
+                    <th className="px-4 py-3 text-right">Primary Foods</th>
+                    <th className="px-4 py-3 text-right">Bakery Foods</th>
+                    <th className="px-4 py-3 text-right font-extrabold">All-Time Collections</th>
+                    <th className="px-4 py-3 text-center">All-Time Payments</th>
+                    <th className="px-4 py-3 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60">
+                  {allKnownStaff.map((staff) => {
+                    const regUser = staffList.find(
+                      (s) => s.uid === staff.id || s.name.toLowerCase() === staff.name.toLowerCase() || (s.email && staff.email && s.email.toLowerCase() === staff.email.toLowerCase())
+                    );
+                    const metrics = staffMetricsMap.get(staff.name.toLowerCase()) || {
+                      totalAmount: 0,
+                      totalCount: 0,
+                      todayAmount: 0,
+                      todayCount: 0,
+                      primaryAmount: 0,
+                      bakeryAmount: 0,
+                    };
+                    const isActive = regUser ? regUser.status === 'active' : true;
+
+                    return (
+                      <tr key={staff.id || staff.name} className="hover:bg-gray-50/60 dark:hover:bg-gray-800/30">
+                        <td className="px-5 py-3">
+                          <div className="flex items-center gap-2.5">
+                            <Avatar name={staff.name} size="sm" />
+                            <div>
+                              <p className="font-bold text-xs text-[var(--color-text-main)]">
+                                {staff.name}
+                              </p>
+                              <p className="text-[10px] text-gray-400">
+                                {staff.email || regUser?.email || 'Staff Account'}
+                              </p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <Badge variant={isActive ? 'success' : 'danger'}>
+                            {isActive ? 'Active' : 'Inactive'}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-3 text-right font-bold text-blue-600 dark:text-blue-400 tabular-nums">
+                          {formatCurrency(metrics.todayAmount)}
+                        </td>
+                        <td className="px-4 py-3 text-center font-semibold">
+                          <span className={cn(
+                            'px-2 py-0.5 rounded-full text-[11px]',
+                            metrics.todayCount > 0
+                              ? 'bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-bold'
+                              : 'bg-gray-100 dark:bg-gray-800 text-gray-400'
+                          )}>
+                            {metrics.todayCount}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-right font-medium text-gray-700 dark:text-gray-300 tabular-nums">
+                          {formatCurrency(metrics.primaryAmount)}
+                        </td>
+                        <td className="px-4 py-3 text-right font-medium text-gray-700 dark:text-gray-300 tabular-nums">
+                          {formatCurrency(metrics.bakeryAmount)}
+                        </td>
+                        <td className="px-4 py-3 text-right font-extrabold text-emerald-600 dark:text-emerald-400 tabular-nums text-sm">
+                          {formatCurrency(metrics.totalAmount)}
+                        </td>
+                        <td className="px-4 py-3 text-center font-semibold">
+                          <span className="px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 text-[11px]">
+                            {metrics.totalCount}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedStaffFilter(staff.name);
+                              setCurrentTab('payments');
+                            }}
+                            className="text-xs font-bold text-[var(--color-primary)] hover:underline inline-flex items-center gap-1"
+                          >
+                            <Eye className="w-3.5 h-3.5" /> View
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ── TAB 3: STAFF DIRECTORY & ACCOUNT MANAGEMENT ── */}
       {currentTab === 'staff' && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -910,8 +1544,11 @@ export default function StaffPage() {
               );
               const metrics = staffMetricsMap.get(staff.name.toLowerCase()) || {
                 totalAmount: 0,
+                totalCount: 0,
                 todayAmount: 0,
-                count: 0,
+                todayCount: 0,
+                primaryAmount: 0,
+                bakeryAmount: 0,
               };
 
               const isActive = regUser ? regUser.status === 'active' : true;
@@ -940,18 +1577,24 @@ export default function StaffPage() {
                     <div className="grid grid-cols-2 gap-3 py-3 px-3.5 rounded-2xl bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-800/60 text-center">
                       <div>
                         <p className="text-[10px] font-semibold uppercase text-gray-400">
-                          Total Collections
+                          Today's Collections
                         </p>
-                        <p className="text-base font-extrabold text-emerald-600 dark:text-emerald-400 tabular-nums">
-                          {formatCurrency(metrics.totalAmount)}
+                        <p className="text-sm font-extrabold text-blue-600 dark:text-blue-400 tabular-nums">
+                          {formatCurrency(metrics.todayAmount)}
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-0.5">
+                          {metrics.todayCount} today
                         </p>
                       </div>
                       <div>
                         <p className="text-[10px] font-semibold uppercase text-gray-400">
-                          Payments Logged
+                          Total Collections
                         </p>
-                        <p className="text-base font-extrabold text-[var(--color-text-main)] tabular-nums">
-                          {metrics.count}
+                        <p className="text-sm font-extrabold text-emerald-600 dark:text-emerald-400 tabular-nums">
+                          {formatCurrency(metrics.totalAmount)}
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-0.5">
+                          {metrics.totalCount} all-time
                         </p>
                       </div>
                     </div>

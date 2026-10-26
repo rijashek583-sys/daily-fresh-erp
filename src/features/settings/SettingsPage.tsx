@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Save, User, Bell, Moon, Sun, Shield, Building2, ChevronRight, Check, Trash2, AlertTriangle, RefreshCw, Download } from 'lucide-react';
+import { Save, User, Bell, Moon, Sun, Shield, Building2, ChevronRight, Check, Trash2, AlertTriangle, RefreshCw, Download, UserCheck } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { Button, Card, Input, Select, PageHeader, Avatar } from '../../components/ui';
 import { useAuthStore } from '../../stores/authStore';
 import { useUIStore } from '../../stores/uiStore';
@@ -7,6 +8,7 @@ import { toast } from 'sonner';
 import { useDataStore } from '../../stores/dataStore';
 import { getTestDataSummary, cleanupTestData, type TestDataSummary } from '../../services/db';
 import AppInstallationSection from './AppInstallationSection';
+import { cn } from '../../lib/utils';
 
 type SettingsTab = 'profile' | 'company' | 'notifications' | 'appearance' | 'security' | 'install' | 'advanced';
 
@@ -24,8 +26,8 @@ export default function SettingsPage() {
     { id: 'notifications', label: 'Notifications', icon: Bell },
     { id: 'appearance', label: 'Appearance', icon: Moon },
     { id: 'security', label: 'Security', icon: Shield },
+    { id: 'install' as SettingsTab, label: 'App & Sharing', icon: Download },
     ...(isAdmin ? [
-      { id: 'install' as SettingsTab, label: 'App & Sharing', icon: Download },
       { id: 'advanced' as SettingsTab, label: 'Advanced', icon: Shield },
     ] : []),
   ];
@@ -124,10 +126,31 @@ export default function SettingsPage() {
         }
       />
 
-      <div className="flex flex-row gap-8">
+      <div className="flex flex-col md:flex-row gap-6 md:gap-8">
         {/* Sidebar Nav */}
-        <div className="w-64 shrink-0">
-          <nav className="space-y-1 sticky top-28">
+        <div className="md:w-64 shrink-0">
+          {/* Mobile Horizontal Tab Navigation */}
+          <div className="md:hidden flex gap-1.5 overflow-x-auto no-scrollbar pb-1 -mx-1 px-1">
+            {tabs.map(t => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setActiveTab(t.id)}
+                className={cn(
+                  'flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all shrink-0 select-none',
+                  activeTab === t.id
+                    ? 'bg-white dark:bg-gray-900 text-[var(--color-primary)] shadow-sm ring-1 ring-black/5 dark:ring-white/10'
+                    : 'bg-gray-100 dark:bg-gray-800/80 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                )}
+              >
+                <t.icon className={cn('w-3.5 h-3.5', activeTab === t.id ? 'text-[var(--color-primary)]' : 'text-gray-400')} />
+                <span>{t.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Desktop Vertical Sidebar Nav */}
+          <nav className="hidden md:block space-y-1 sticky top-28">
             {tabs.map(t => (
               <button
                 key={t.id}
@@ -145,13 +168,13 @@ export default function SettingsPage() {
         </div>
 
         {/* Content area */}
-        <div className="flex-1">
-          <Card padding={false} className="overflow-hidden min-h-[500px]">
-            <form id="settings-form" onSubmit={handleSave} className="p-10">
+        <div className="flex-1 min-w-0">
+          <Card padding={false} className="overflow-hidden min-h-[400px]">
+            <form id="settings-form" onSubmit={handleSave} className="p-4 sm:p-6 md:p-10">
               
               {activeTab === 'profile' && (
-                <div className="space-y-8 animate-in fade-in duration-300">
-                  <div className="flex items-center gap-6 pb-8 border-b border-gray-100 dark:border-white/[0.05]">
+                <div className="space-y-6 sm:space-y-8 animate-in fade-in duration-300">
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-6 pb-6 sm:pb-8 border-b border-gray-100 dark:border-white/[0.05]">
                     <div className="relative">
                       <Avatar name={user?.displayName || 'User'} size="xl" className="shadow-lg border-2 border-white dark:border-gray-800" />
                       <button type="button" className="absolute bottom-0 right-0 w-8 h-8 rounded-full bg-white dark:bg-gray-800 shadow-md border border-gray-100 dark:border-gray-700 flex items-center justify-center text-gray-500 hover:text-[var(--color-primary)] transition-colors">
@@ -207,7 +230,7 @@ export default function SettingsPage() {
 
                   <div className="space-y-4">
                     <label className="text-sm font-medium text-[var(--color-text-main)]">Theme Preference</label>
-                    <div className="grid grid-cols-3 gap-6">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-6">
                       {[
                         { id: 'light', icon: Sun, label: 'Light', desc: 'Pristine white UI' },
                         { id: 'dark', icon: Moon, label: 'Dark', desc: 'Sleek dark tones' },
@@ -244,7 +267,7 @@ export default function SettingsPage() {
                 </div>
               )}
 
-              {activeTab === 'install' && isAdmin && (
+              {activeTab === 'install' && (
                 <AppInstallationSection />
               )}
 
@@ -255,6 +278,28 @@ export default function SettingsPage() {
                     <p className="text-sm font-medium text-[var(--color-text-muted)]">Perform administrative maintenance and cleanup tasks.</p>
                   </div>
                   
+                  {/* Admin Name Registry Card */}
+                  <div className="p-6 border border-black/[0.06] dark:border-white/[0.06] rounded-2xl bg-gray-50/50 dark:bg-gray-800/40">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="flex items-start gap-4">
+                        <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-950/40 flex items-center justify-center shrink-0 text-[var(--color-primary)]">
+                          <UserCheck className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <h4 className="text-base font-semibold text-[var(--color-text-main)]">Expense Admin Name Registry</h4>
+                          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 max-w-xl leading-relaxed">
+                            Configure operator display names for attributing operational expenses recorded under shared Admin logins.
+                          </p>
+                        </div>
+                      </div>
+                      <Link to="/expenses/admin-names" className="shrink-0">
+                        <Button variant="secondary" size="sm" icon={<ChevronRight className="w-4 h-4" />}>
+                          Manage Names
+                        </Button>
+                      </Link>
+                    </div>
+                  </div>
+
                   {/* Test Data Cleanup Card */}
                   <div className="p-6 border border-red-200 dark:border-red-900/40 rounded-2xl bg-red-50/40 dark:bg-red-950/10">
                     <div className="flex items-start gap-4">

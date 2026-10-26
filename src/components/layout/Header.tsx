@@ -6,17 +6,23 @@ import UserMenu from '../common/UserMenu';
 import { DivisionTabsDesktop, DivisionDropdownMobile } from '../ui/DivisionTabs';
 import { useDivisionStore } from '../../stores/divisionStore';
 import { useUIStore } from '../../stores/uiStore';
+import { useLocation } from 'react-router-dom';
 import InstallAppButton from '../pwa/InstallAppButton';
 
 export default function Header() {
   const { activeDivision, setDivision } = useDivisionStore();
   const { setSidebarOpen } = useUIStore();
+  const location = useLocation();
+
+  const hideDivision = ['/settings', '/trash', '/staff', '/notifications'].some(path =>
+    location.pathname.startsWith(path)
+  );
 
   return (
-    <header className="flex flex-col bg-[var(--color-bg)]/70 backdrop-blur-2xl border-b border-black/[0.04] dark:border-white/[0.04] shrink-0 sticky top-0 z-20 transition-all duration-300">
+    <header className="flex flex-col bg-white dark:bg-[#0B0F19] md:bg-[var(--color-bg)]/80 md:backdrop-blur-2xl border-b border-gray-200/80 dark:border-white/[0.08] shrink-0 sticky top-0 z-20 transition-all duration-300 pt-[env(safe-area-inset-top,0px)]">
       
       {/* ─── Top Row: Mobile & Desktop ─── */}
-      <div className="h-16 md:h-20 flex items-center justify-between px-4 md:px-8 lg:px-10 gap-3 md:gap-6 w-full">
+      <div className="h-14 sm:h-16 md:h-20 flex items-center justify-between px-4 md:px-8 lg:px-10 gap-3 md:gap-6 w-full">
         
         {/* Left Actions */}
         <div className="flex items-center gap-4 flex-1 min-w-0">
@@ -36,11 +42,13 @@ export default function Header() {
         </div>
 
         {/* Right Actions */}
-        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
           {/* Desktop Division Tabs (hidden on mobile) */}
-          <div className="hidden md:block">
-            <DivisionTabsDesktop activeTab={activeDivision} onChange={setDivision} className="shadow-sm mr-1" />
-          </div>
+          {!hideDivision && (
+            <div className="hidden md:block">
+              <DivisionTabsDesktop activeTab={activeDivision} onChange={setDivision} className="shadow-sm mr-1" />
+            </div>
+          )}
 
           <InstallAppButton variant="header" />
 
@@ -52,9 +60,11 @@ export default function Header() {
       </div>
 
       {/* ─── Bottom Row: Mobile Only Category Dropdown ─── */}
-      <div className="md:hidden px-4 pb-4">
-        <DivisionDropdownMobile activeTab={activeDivision} onChange={setDivision} />
-      </div>
+      {!hideDivision && (
+        <div className="md:hidden px-4 pt-0.5 pb-3">
+          <DivisionDropdownMobile activeTab={activeDivision} onChange={setDivision} />
+        </div>
+      )}
 
     </header>
   );

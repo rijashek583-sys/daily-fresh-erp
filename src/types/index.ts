@@ -52,6 +52,7 @@ export interface Client {
   outstanding: number;
   credit?: number;
   availableCredit?: number;
+  generalCredit?: number;
   primaryCredit?: number;
   bakeryCredit?: number;
   rawBalance?: number;
@@ -114,6 +115,8 @@ export interface Order {
   notes?: string;
   staffId?: string;
   staffName?: string;
+  deletedAt?: string;
+  deletedBy?: string;
 }
 
 export interface TrashDocument {
@@ -131,6 +134,7 @@ export interface Payment {
   orderType?: OrderType; // 'client' | 'direct'
   /** Links this payment to the specific order/invoice it was recorded against. */
   invoiceId?: string;
+  otherInvoiceId?: string;
   clientId: string;
   clientName: string;
   region?: string;
@@ -139,11 +143,21 @@ export interface Payment {
   recordedBy?: string;
   amount: number;
   appliedAmount?: number;
+  appliedToPrevious?: number;
+  appliedToSameDivisionPrevious?: number;
+  appliedToOtherDivisionPrevious?: number;
+  appliedToOtherBill?: number;
   excessCredit?: number;
+  generalCredit?: number;
   isAdvance?: boolean;
   method: PaymentMethod;
   reference?: string;
   notes?: string;
+  idempotencyKey?: string;
+  isCorrected?: boolean;
+  originalAmount?: number;
+  correctionReason?: string;
+  correctionHistory?: PaymentCorrectionRecord[];
   paidAt?: string;
   paymentDate?: string;
   division: Division; // required — payments must be specifically primary or bakery
@@ -154,9 +168,23 @@ export interface Payment {
   deletedBy?: string;
 }
 
+export interface PaymentCorrectionRecord {
+  correctedAt: string;
+  correctedBy: string;
+  adminId: string;
+  adminName: string;
+  originalAmount: number;
+  newAmount: number;
+  reason: string;
+  paymentId?: string;
+  invoiceId?: string;
+  ledgerEntryIds?: string[];
+}
 
 export interface LedgerTransaction {
   id: string;
+  isCorrected?: boolean;
+  originalAmount?: number;
   type: 'payment' | 'invoice' | 'opening_balance';
   paymentId?: string;
   clientId: string;
@@ -168,7 +196,11 @@ export interface LedgerTransaction {
   invoiceId?: string;
   amount: number;
   appliedAmount?: number;
+  appliedToPrevious?: number;
+  appliedToSameDivisionPrevious?: number;
+  appliedToOtherDivisionPrevious?: number;
   excessCredit?: number;
+  generalCredit?: number;
   creditApplied?: number;
   isAdvance?: boolean;
   paymentDate?: string;
@@ -181,4 +213,10 @@ export interface LedgerTransaction {
 
 export const monthlyRevenueData: any[] = [];
 export const deletedRegions: any[] = [];
+
+export type {
+  CustomerCreditBalance,
+  CustomerCreditBalanceReviewBasis,
+  CustomerCreditBalanceState,
+} from './customerCreditBalance.types';
 

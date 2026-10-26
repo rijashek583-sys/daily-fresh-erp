@@ -209,7 +209,7 @@ export default function TrashPage() {
 
       <Card padding={false} className="overflow-hidden">
         {/* Module Tabs */}
-        <div className="flex overflow-x-auto border-b border-gray-100 dark:border-white/[0.05] p-2">
+        <div className="flex overflow-x-auto border-b border-gray-100 dark:border-white/[0.05] p-2 no-scrollbar">
           {(['all', 'orders', 'clients', 'regions', 'products', 'payments'] as TrashModule[]).map(tab => (
             <button
               key={tab}

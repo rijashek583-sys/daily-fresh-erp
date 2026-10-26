@@ -4,20 +4,21 @@ import {
   ArrowLeft, FileText, CheckCircle2, TrendingUp, TrendingDown, 
   Package, Calendar, UserPlus, CreditCard, Check, Clock, Edit3, X,
   Banknote, Smartphone, Building, ShoppingCart, Tags, Search, Save,
-  Download, BookOpen, Wallet
+  Download, BookOpen, Wallet, ShieldCheck
 } from 'lucide-react';
-import { type PaymentMethod } from '../../types';
+import { type Payment, type PaymentMethod } from '../../types';
 import { useDataStore } from '../../stores/dataStore';
 import { Button, Badge, Card, StatusSelect } from '../../components/ui';
 import { formatCurrency, cn, getProductDivision } from '../../lib/utils';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
-import { saveClientPricing, updatePayment } from '../../services/db';
+import { saveClientPricing } from '../../services/db';
 import { useAuthStore } from '../../stores/authStore';
 import { useDivisionStore } from '../../stores/divisionStore';
 import { getClientOutstanding, getClientMetrics } from '../../lib/billing';
 import RecordPaymentModal from '../../components/payments/RecordPaymentModal';
 import OpeningBalanceModal from '../../components/clients/OpeningBalanceModal';
+import CorrectPaymentModal from '../../components/payments/CorrectPaymentModal';
 type Tab = 'general' | 'pricing' | 'orders' | 'ledger' | 'payments';
 
 const methodIcon: Record<PaymentMethod, React.ElementType> = {
@@ -31,7 +32,7 @@ const TABS: { id: Tab; label: string; icon: React.ElementType; adminOnly?: boole
   { id: 'general', label: 'General', icon: FileText },
   { id: 'pricing', label: 'Product Pricing', icon: Tags, adminOnly: true },
   { id: 'orders', label: 'Order History', icon: ShoppingCart },
-  { id: 'ledger', label: 'Ledger', icon: BookOpen, adminOnly: true },
+  { id: 'ledger', label: 'Ledger', icon: BookOpen },
   { id: 'payments', label: 'Payments', icon: CreditCard },
 ];
 
@@ -49,12 +50,8 @@ export default function ClientDetailPage() {
 
   const { activeDivision } = useDivisionStore();
 
-  // Payment Edit Modal State
-  const [editingPayment, setEditingPayment] = useState<any>(null);
-  const [editAmount, setEditAmount] = useState('');
-  const [editMethod, setEditMethod] = useState<PaymentMethod>('cash');
-  const [editReference, setEditReference] = useState('');
-  const [editNotes, setEditNotes] = useState('');
+  // Payment Correction Modal State (Admin Only)
+  const [correctingPayment, setCorrectingPayment] = useState<Payment | null>(null);
   const [recordPaymentOpen, setRecordPaymentOpen] = useState(false);
   const [openingBalanceModalOpen, setOpeningBalanceModalOpen] = useState(false);
 
@@ -111,6 +108,7 @@ export default function ClientDetailPage() {
         excessCredit: l.excessCredit,
         creditApplied: l.creditApplied,
         appliedAmount: l.appliedAmount,
+        appliedToPrevious: l.appliedToPrevious,
         isAdvance: l.isAdvance,
       };
     });
@@ -193,28 +191,6 @@ export default function ClientDetailPage() {
   const totalCollected = totalCredit;
   const totalPending = outstanding;
 
-  const handleSavePaymentEdit = async () => {
-    if (!editingPayment) return;
-    try {
-      const amount = parseFloat(editAmount);
-      if (isNaN(amount) || amount < 0) {
-        toast.error("Please enter a valid amount");
-        return;
-      }
-      await updatePayment(editingPayment.id, {
-        amount,
-        method: editMethod,
-        reference: editReference,
-        notes: editNotes,
-        updatedBy: isStaff ? 'Staff' : 'Admin'
-      });
-      toast.success("Payment updated successfully");
-      setEditingPayment(null);
-    } catch (e) {
-      // error handled in db.ts
-    }
-  };
-
   return (
     <div className="max-w-5xl mx-auto pb-12">
       {/* Back button */}
@@ -230,16 +206,16 @@ export default function ClientDetailPage() {
 
       {/* Client Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-        <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-2xl bg-[var(--color-primary)]/10 flex items-center justify-center text-[var(--color-primary)] text-xl font-extrabold shrink-0">
+        <div className="flex items-center gap-4 min-w-0">
+          <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-[var(--color-primary)]/10 flex items-center justify-center text-[var(--color-primary)] text-xl font-extrabold shrink-0">
             {client.name.charAt(0)}
           </div>
-          <div>
-            <h1 className="text-2xl font-extrabold text-[var(--color-text-main)] tracking-tight">{client.name}</h1>
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl font-extrabold text-[var(--color-text-main)] tracking-tight truncate">{client.name}</h1>
             <div className="flex items-center gap-2 mt-1 flex-wrap">
               {client.phone && (
                 <>
-                  <span className="text-sm font-medium text-[var(--color-text-muted)]">{client.phone}</span>
+                  <span className="text-xs sm:text-sm font-medium text-[var(--color-text-muted)]">{client.phone}</span>
                   <span className="text-gray-300 dark:text-gray-700">•</span>
                 </>
               )}
@@ -247,7 +223,17 @@ export default function ClientDetailPage() {
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          {isAdmin && (
+            <Button
+              variant="outline"
+              size="sm"
+              icon={<ShieldCheck className="w-4 h-4 text-[var(--color-primary)]" />}
+              onClick={() => navigate(`/clients/${client.id}/credit-reconciliation`)}
+            >
+              Credit Review
+            </Button>
+          )}
           {isAdmin && (
             <Button
               variant="outline"
@@ -271,7 +257,7 @@ export default function ClientDetailPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-6 bg-gray-100 dark:bg-gray-800/60 p-1 rounded-2xl overflow-x-auto">
+      <div className="flex gap-1 mb-6 bg-gray-100 dark:bg-gray-800/60 p-1 rounded-2xl overflow-x-auto no-scrollbar">
         {visibleTabs.map(tab => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -279,7 +265,7 @@ export default function ClientDetailPage() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 whitespace-nowrap flex-1 justify-center ${
+              className={`flex items-center gap-2 px-3.5 py-2 sm:px-4 sm:py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 whitespace-nowrap shrink-0 sm:flex-1 justify-center ${
                 isActive
                   ? 'bg-white dark:bg-gray-900 text-[var(--color-text-main)] shadow-sm'
                   : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-main)]'
@@ -569,7 +555,11 @@ export default function ClientDetailPage() {
                 <div>
                   <p className="text-xs font-bold text-[var(--color-text-muted)]">Available Credit</p>
                   {activeDivision === 'all' && (
-                    <p className="text-[10px] text-gray-400">P: {formatCurrency(metrics.primaryCredit)} · B: {formatCurrency(metrics.bakeryCredit)}</p>
+                    <p className="text-[10px] text-gray-400">
+                      {metrics.primaryCredit > 0 || metrics.bakeryCredit > 0
+                        ? `P: ${formatCurrency(metrics.primaryCredit)} · B: ${formatCurrency(metrics.bakeryCredit)}`
+                        : (availableCredit > 0 ? 'Unified Client Credit' : 'P: ₹0.00 · B: ₹0.00')}
+                    </p>
                   )}
                 </div>
               </div>
@@ -619,6 +609,11 @@ export default function ClientDetailPage() {
                               </span>
                             )}
                           </div>
+                          {entry.appliedToPrevious && entry.appliedToPrevious > 0 ? (
+                            <p className="text-[10px] font-semibold text-blue-600 dark:text-blue-400 mt-0.5">
+                              Applied to Previous Balance: {formatCurrency(entry.appliedToPrevious)}
+                            </p>
+                          ) : null}
                           {entry.excessCredit && entry.excessCredit > 0 ? (
                             <p className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 mt-0.5">
                               Advance Credit Created: +{formatCurrency(entry.excessCredit)}
@@ -739,7 +734,12 @@ export default function ClientDetailPage() {
                           </td>
                           <td className="px-6 py-4">{p.reference ? <span className="font-mono text-[10px] font-medium text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded-md">{p.reference}</span> : <span className="text-gray-300 dark:text-gray-700">—</span>}</td>
                           <td className="px-6 py-4">
-                            <span className="text-sm font-semibold text-[var(--color-text-main)]">{formatCurrency(p.amount)}</span>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-semibold text-[var(--color-text-main)]">{formatCurrency(p.amount)}</span>
+                              {p.isCorrected && (
+                                <Badge variant="purple" className="text-[10px]">Corrected</Badge>
+                              )}
+                            </div>
                             {p.excessCredit && p.excessCredit > 0 ? (
                               <p className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 mt-0.5">
                                 Credit created: +{formatCurrency(p.excessCredit)}
@@ -750,23 +750,25 @@ export default function ClientDetailPage() {
                                 Applied to bill: {formatCurrency(p.appliedAmount)}
                               </p>
                             )}
+                            {p.appliedToPrevious && p.appliedToPrevious > 0 ? (
+                              <p className="text-[10px] text-blue-600 dark:text-blue-400 mt-0.5">
+                                Applied to previous: {formatCurrency(p.appliedToPrevious)}
+                              </p>
+                            ) : null}
                           </td>
                           <td className="px-6 py-4"><span className="text-xs font-medium text-gray-500">{format(new Date(p.createdAt), 'MMM d, yyyy h:mm a')}</span></td>
                           <td className="px-6 py-4">
-                            {isAdmin && (
+                            {isAdmin ? (
                               <Button 
                                 variant="outline" 
                                 size="sm"
-                                onClick={() => {
-                                  setEditingPayment(p);
-                                  setEditAmount(p.amount.toString());
-                                  setEditMethod(p.method);
-                                  setEditReference(p.reference || '');
-                                  setEditNotes(p.notes || '');
-                                }}
+                                className="text-xs h-8 px-2.5 border-amber-300 dark:border-amber-800/80 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30 font-semibold"
+                                onClick={() => setCorrectingPayment(p)}
                               >
-                                Edit
+                                Correct Payment
                               </Button>
+                            ) : (
+                              <span className="text-xs text-gray-300 dark:text-gray-700">—</span>
                             )}
                           </td>
                         </tr>
@@ -785,60 +787,12 @@ export default function ClientDetailPage() {
         </div>
       )}
       
-      {/* Edit Payment Modal */}
-      {editingPayment && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-[var(--color-bg)] rounded-3xl w-full max-w-sm shadow-2xl overflow-hidden flex flex-col">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-white/[0.05]">
-              <h2 className="text-lg font-bold text-[var(--color-text-main)]">Edit Payment</h2>
-              <button onClick={() => setEditingPayment(null)} className="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-900 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm font-semibold text-[var(--color-text-main)] mb-1.5">Amount</label>
-                <input
-                  type="number"
-                  value={editAmount}
-                  onChange={(e) => setEditAmount(e.target.value)}
-                  className="w-full px-4 py-3 text-sm font-bold rounded-xl border-2 border-transparent bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] focus:bg-[var(--color-card)] transition-all"
-                  autoFocus
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold text-[var(--color-text-main)] mb-1.5">Method</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {(['cash', 'upi', 'bank_transfer', 'card'] as PaymentMethod[]).map(m => (
-                    <button
-                      key={m}
-                      onClick={() => setEditMethod(m)}
-                      className={`py-2 px-3 rounded-lg text-xs font-bold capitalize transition-all border-2 ${editMethod === m ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/10 text-[var(--color-primary)]' : 'border-transparent bg-[var(--color-input-bg)] text-[var(--color-text-muted)] hover:bg-[var(--color-card)]'}`}
-                    >
-                      {m.replace('_', ' ')}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-semibold text-[var(--color-text-main)] mb-1.5">Reference No</label>
-                <input
-                  type="text"
-                  value={editReference}
-                  onChange={(e) => setEditReference(e.target.value)}
-                  className="w-full px-4 py-2 text-sm font-bold rounded-xl border-2 border-transparent bg-[var(--color-input-bg)] text-[var(--color-text-main)] outline-none focus:border-[var(--color-primary)] focus:bg-[var(--color-card)] transition-all"
-                />
-              </div>
-
-              <Button size="lg" className="w-full h-12 text-base shadow-lg mt-4" onClick={handleSavePaymentEdit}>
-                Save Changes
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Correct Payment Modal (Admin Only) */}
+      <CorrectPaymentModal
+        isOpen={!!correctingPayment}
+        payment={correctingPayment}
+        onClose={() => setCorrectingPayment(null)}
+      />
 
       {/* Record Payment Modal */}
       <RecordPaymentModal

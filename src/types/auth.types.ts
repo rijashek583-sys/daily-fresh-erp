@@ -5,7 +5,7 @@ export interface AppUser {
   email: string | null;
   displayName: string | null;
   name?: string;
-  photoURL: string | null;
+  photoURL?: string | null;
   role: UserRole;
   status?: 'active' | 'inactive';
 }

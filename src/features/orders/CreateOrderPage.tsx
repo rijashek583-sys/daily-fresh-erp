@@ -111,6 +111,11 @@ export default function CreateOrderPage() {
       if (existingOrder) {
         await updateOrder(existingOrder.id, {
           items: newItems, total: totalAmount, subtotal: totalAmount,
+          creditApplied: creditToApply,
+          primaryCreditApplied: activeTab === 'primary' ? creditToApply : 0,
+          bakeryCreditApplied: activeTab === 'bakery' ? creditToApply : 0,
+          netDue: netPayable,
+          paymentStatus: netPayable <= 0.005 ? 'paid' : (creditToApply > 0 ? 'partial' : 'pending'),
           deliveryDate, clientId: selectedClient.id, clientName: selectedClient.name,
           division: activeTab, updatedAt: now
         });
@@ -119,6 +124,11 @@ export default function CreateOrderPage() {
         const newOrder: Omit<Order, 'id'> = {
           clientId: selectedClient.id, clientName: selectedClient.name,
           items: newItems, subtotal: totalAmount, tax: 0, total: totalAmount,
+          creditApplied: creditToApply,
+          primaryCreditApplied: activeTab === 'primary' ? creditToApply : 0,
+          bakeryCreditApplied: activeTab === 'bakery' ? creditToApply : 0,
+          netDue: netPayable,
+          paymentStatus: netPayable <= 0.005 ? 'paid' : (creditToApply > 0 ? 'partial' : 'pending'),
           deliveryDate, division: activeTab, createdAt: now, updatedAt: now, updatedBy: 'admin'
         };
         await addOrder(newOrder);
@@ -232,7 +242,7 @@ export default function CreateOrderPage() {
               })}
             </div>
           )}
-          <div className="px-6 py-5 border-t border-gray-100 dark:border-white/[0.05] bg-gray-50/50 dark:bg-black/10 flex flex-col sm:flex-row items-center justify-between gap-4 sticky bottom-0">
+          <div className="px-6 py-5 border-t border-gray-100 dark:border-white/[0.05] bg-white/95 dark:bg-[#0B0F19]/95 backdrop-blur-md flex flex-col sm:flex-row items-center justify-between gap-4 sticky bottom-[calc(4rem+env(safe-area-inset-bottom,0px))] md:bottom-0 z-10 shadow-sm">
             <div>
               <div className="flex items-center gap-2">
                 <p className="text-sm font-semibold text-gray-500 mb-0.5">Order Total ({totalItems} items)</p>

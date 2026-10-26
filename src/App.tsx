@@ -2,17 +2,23 @@ import { Providers } from './app/providers';
 import { AppRouter } from './app/router';
 import { Toaster } from 'sonner';
 import { useEffect } from 'react';
-import { useDataStore } from './stores/dataStore';
+import PwaUpdateBanner from './components/pwa/PwaUpdateBanner';
+import NativeAppUpdateModal from './components/pwa/NativeAppUpdateModal';
+import { initAppUpdateLifecycle } from './services/appUpdateService';
 
 export default function App() {
   useEffect(() => {
-    const unsubscribe = useDataStore.getState().initialize();
-    return () => unsubscribe();
+    const unsubscribeUpdate = initAppUpdateLifecycle();
+    return () => {
+      unsubscribeUpdate();
+    };
   }, []);
 
   return (
     <Providers>
       <AppRouter />
+      <PwaUpdateBanner />
+      <NativeAppUpdateModal />
       <Toaster
         position="top-right"
         richColors

@@ -98,7 +98,7 @@ export function Card({ children, className, hover, padding = true }: CardProps) 
       'bg-[var(--color-card)] rounded-3xl border border-black/[0.04] dark:border-white/[0.04]',
       'shadow-[var(--shadow-soft)] flex flex-col h-full',
       hover && 'hover:shadow-[var(--shadow-hover)] hover:-translate-y-0.5 transition-all duration-300 cursor-pointer',
-      padding && 'p-8',
+      padding && 'p-4 sm:p-6 md:p-8',
       className,
     )}>
       {children}
@@ -182,10 +182,10 @@ export function PageHeader({ title, description, actions, className }: PageHeade
   return (
     <div className={cn('flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8 sm:mb-10', className)}>
       <div>
-        <h1 className="text-3xl font-semibold text-[var(--color-text-main)] tracking-tight">{title}</h1>
+        <h1 className="text-2xl sm:text-3xl font-semibold text-[var(--color-text-main)] tracking-tight">{title}</h1>
         {description && <p className="text-sm text-[var(--color-text-muted)] mt-1.5">{description}</p>}
       </div>
-      {actions && <div className="flex flex-wrap items-center gap-3 shrink-0">{actions}</div>}
+      {actions && <div className="flex flex-wrap items-center gap-2 sm:gap-3 shrink-0 w-full sm:w-auto">{actions}</div>}
     </div>
   );
 }
@@ -271,24 +271,24 @@ export function StatCard({ id, label, value, change, icon, iconBg = 'bg-[var(--c
   if (loading) return <SkeletonCard />;
 
   return (
-    <Card id={id} className="group" hover>
-      <div className="flex items-center justify-between mb-5">
-        <div className={cn('w-12 h-12 rounded-2xl flex items-center justify-center transition-transform group-hover:scale-110 duration-300', iconBg)}>
+    <Card id={id} className="group min-w-0" hover>
+      <div className="flex items-center justify-between mb-3 sm:mb-5">
+        <div className={cn('w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center transition-transform group-hover:scale-110 duration-300 shrink-0', iconBg)}>
           {icon}
         </div>
         {change !== undefined && (
           <span className={cn(
-            'flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full',
+            'flex items-center gap-1 text-[10px] sm:text-[11px] font-medium px-2 py-0.5 rounded-full shrink-0',
             change >= 0 ? 'text-[var(--color-success)] bg-[var(--color-success-bg)]' : 'text-red-600 bg-red-100 dark:bg-red-950/40 dark:text-red-400',
           )}>
             {change >= 0 ? '↗' : '↘'} {Math.abs(change)}%
           </span>
         )}
       </div>
-      <div>
-        <p className="text-3xl font-semibold text-[var(--color-text-main)] tracking-tight mb-1">{value}</p>
-        <p className="text-sm font-medium text-[var(--color-text-muted)]">{label}</p>
-        {subtitle && <p className="text-xs text-gray-400 dark:text-gray-500 mt-1.5">{subtitle}</p>}
+      <div className="min-w-0">
+        <p className="text-xl sm:text-2xl md:text-3xl font-semibold text-[var(--color-text-main)] tracking-tight mb-0.5 sm:mb-1 truncate">{value}</p>
+        <p className="text-xs sm:text-sm font-medium text-[var(--color-text-muted)] truncate">{label}</p>
+        {subtitle && <p className="text-[10px] sm:text-xs text-gray-400 dark:text-gray-500 mt-1 truncate">{subtitle}</p>}
       </div>
     </Card>
   );
@@ -423,6 +423,7 @@ export function Select({ label, error, id, options, className, ...props }: Selec
           backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239CA3AF'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`,
           backgroundPosition: 'right 1rem center',
           backgroundSize: '1.25rem 1.25rem',
+          backgroundRepeat: 'no-repeat',
         }}
         {...props}
       >

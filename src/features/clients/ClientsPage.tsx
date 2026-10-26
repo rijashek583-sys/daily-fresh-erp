@@ -10,6 +10,7 @@ import { updateClient, moveToTrash, saveRegions } from '../../services/db';
 import { useDivisionStore } from '../../stores/divisionStore';
 import { getClientMetrics } from '../../lib/billing';
 import { formatCurrency } from '../../lib/utils';
+import StaffClientsPage from './StaffClientsPage';
 
 function RowActions({ client, onEdit, onDelete, onView }: { client: Client, onEdit: () => void, onDelete: () => void, onView: () => void }) {
   const [open, setOpen] = useState(false);
@@ -55,6 +56,9 @@ export default function ClientsPage() {
   const { clients, orders, regions } = useDataStore();
   const { user } = useAuthStore();
   const isAdmin = user?.role === 'admin';
+  if (!isAdmin) {
+    return <StaffClientsPage />;
+  }
   const navigate = useNavigate();
   const { activeDivision } = useDivisionStore();
   

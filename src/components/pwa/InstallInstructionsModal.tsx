@@ -1,16 +1,19 @@
 import React, { useState } from 'react';
 import {
   X, Smartphone, Monitor, Download, CheckCircle2,
-  Share2, ShieldCheck, Laptop
+  Share2, ShieldCheck, Laptop, AlertTriangle, Info, ExternalLink
 } from 'lucide-react';
 import { type Platform } from '../../hooks/usePwaInstall';
+import { OFFICIAL_DISTRIBUTION } from '../../config/distribution';
 import { Button } from '../ui';
+import { toast } from 'sonner';
 
 interface InstallInstructionsModalProps {
   isOpen: boolean;
   onClose: () => void;
   detectedPlatform: Platform;
   hasNativePrompt?: boolean;
+  isInAppBrowser?: boolean;
   onTriggerNativePrompt?: () => void;
 }
 
@@ -19,6 +22,7 @@ export default function InstallInstructionsModal({
   onClose,
   detectedPlatform,
   hasNativePrompt,
+  isInAppBrowser,
   onTriggerNativePrompt,
 }: InstallInstructionsModalProps) {
   // Default tab to detected platform
@@ -144,6 +148,53 @@ export default function InstallInstructionsModal({
 
         {/* Content Body */}
         <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+          {/* In-App Browser Warning (e.g. WhatsApp, Instagram, FB) */}
+          {isInAppBrowser && (
+            <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-800/60 flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="text-xs font-bold text-amber-950 dark:text-amber-200">
+                  In-App Browser Detected (WhatsApp / Instagram / Facebook)
+                </p>
+                <p className="text-[11px] text-amber-800 dark:text-amber-300 mt-0.5 leading-relaxed">
+                  You are viewing Daily Fresh inside an in-app browser. In-app browsers block direct PWA installation. Tap the button below to open directly in Google Chrome.
+                </p>
+                <div className="mt-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const cleanUrl = window.location.href.replace(/^https?:\/\//, '');
+                      window.location.href = `intent://${cleanUrl}#Intent;scheme=https;package=com.android.chrome;end`;
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white shadow-xs transition-colors"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Open in Google Chrome</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Why direct prompt was unavailable banner */}
+          {!hasNativePrompt && !isInAppBrowser && (activeTab === 'android' || activeTab === 'windows') && (
+            <div className="p-3.5 rounded-2xl bg-blue-50 dark:bg-blue-950/30 border border-blue-200/80 dark:border-blue-800/60 flex items-start gap-3">
+              <Info className="w-5 h-5 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-xs font-bold text-blue-950 dark:text-blue-200">
+                  {activeTab === 'android'
+                    ? 'Direct Installation Note'
+                    : 'Windows Direct Prompt Note'}
+                </p>
+                <p className="text-[11px] text-blue-800 dark:text-blue-300 mt-0.5 leading-relaxed">
+                  {activeTab === 'android'
+                    ? "If your browser did not display the direct installation dialog, the install option may have already been moved to Chrome's address bar (+) or browser menu (⋮), or your browser does not support web app prompts."
+                    : "If Windows Chrome or Edge did not display the direct installation dialog, click the Install App icon on the right side of the URL address bar or use the browser menu (Apps → Install Daily Fresh)."}
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Quick 1-click Install Prompt Banner if ready */}
           {hasNativePrompt && onTriggerNativePrompt && (
             <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-800/60 flex items-center justify-between gap-3">
@@ -174,9 +225,9 @@ export default function InstallInstructionsModal({
 
           {/* Android Step-by-Step */}
           {activeTab === 'android' && (
-            <div className="space-y-3">
+            <div className="space-y-4">
               <p className="text-xs font-bold text-[var(--color-text-main)] uppercase tracking-wider">
-                How to Install on Android (Chrome / Edge / Samsung Internet)
+                Option 1 (Recommended): Install via Android Browser (Chrome / Edge / Samsung Internet)
               </p>
               <ol className="space-y-2.5 text-xs text-[var(--color-text-main)]">
                 <li className="flex items-start gap-3 p-3 rounded-2xl bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-800">
@@ -196,9 +247,9 @@ export default function InstallInstructionsModal({
                     2
                   </span>
                   <div>
-                    <p className="font-bold">Tap the Browser Menu (⋮)</p>
+                    <p className="font-bold">Tap the Address Bar (+) or Browser Menu (⋮)</p>
                     <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
-                      Tap the three vertical dots located in the top-right corner of Chrome.
+                      Look for the <strong>Install (+)</strong> button directly in Chrome&apos;s top address bar (next to tabs), or tap the three vertical dots (⋮) in the top-right corner.
                     </p>
                   </div>
                 </li>
@@ -210,7 +261,7 @@ export default function InstallInstructionsModal({
                   <div>
                     <p className="font-bold">Select &ldquo;Install app&rdquo; or &ldquo;Add to Home screen&rdquo;</p>
                     <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
-                      Tap <strong>Install app</strong> (or <strong>Add to Home screen</strong> if shown).
+                      Tap <strong>Install app</strong> (or <strong>Add to Home screen</strong> if shown in the menu).
                     </p>
                   </div>
                 </li>
@@ -227,14 +278,95 @@ export default function InstallInstructionsModal({
                   </div>
                 </li>
               </ol>
+
+              {/* Direct APK Download Alternative Card */}
+              <p className="text-xs font-bold text-[var(--color-text-main)] uppercase tracking-wider pt-2">
+                Option 2: Standalone Signed Android APK
+              </p>
+              <div className="p-4 rounded-2xl border border-red-200 dark:border-red-900/50 bg-red-50/50 dark:bg-red-950/20 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    <span className="text-xs font-bold text-gray-900 dark:text-white">
+                      Official Android Package (APK)
+                    </span>
+                  </div>
+                  <span className="text-[11px] font-mono font-bold text-red-700 dark:text-red-300">
+                    {OFFICIAL_DISTRIBUTION.downloads.android.fileSize}
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-600 dark:text-gray-300 leading-relaxed">
+                  Download the signed release APK for manual installation on your Android device without Google Play.
+                </p>
+                <div className="pt-1">
+                  <a
+                    href={OFFICIAL_DISTRIBUTION.downloads.android.latestUrl}
+                    download={OFFICIAL_DISTRIBUTION.downloads.android.fileName}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => {
+                      toast.info('Downloading DailyFresh.apk', {
+                        description: 'Tap Open on the downloaded file in your notification bar to complete installation. (Note: Downloading is not installing).',
+                        duration: 8000,
+                      });
+                    }}
+                    className="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-white bg-red-600 hover:bg-red-700 shadow-md shadow-red-600/20 active:scale-[0.98] transition-all flex items-center justify-center gap-2 text-center"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Download DailyFresh.apk</span>
+                  </a>
+                </div>
+                <p className="text-[10px] text-amber-700 dark:text-amber-400 font-medium leading-tight">
+                  Note: Downloading the file does not mean the app is installed. You must tap &ldquo;Open&rdquo; in notifications to complete installation.
+                </p>
+              </div>
             </div>
           )}
 
           {/* Windows Step-by-Step */}
           {activeTab === 'windows' && (
-            <div className="space-y-3">
+            <div className="space-y-4">
+              {/* Direct Windows Setup Download Card */}
+              <div className="p-4 rounded-2xl border border-red-200 dark:border-red-900/50 bg-red-50/50 dark:bg-red-950/20 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    <span className="text-xs font-bold text-gray-900 dark:text-white">
+                      Official Windows Desktop Installer
+                    </span>
+                  </div>
+                  <span className="text-[11px] font-mono font-bold text-red-700 dark:text-red-300">
+                    {OFFICIAL_DISTRIBUTION.downloads.windows.fileSize}
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-600 dark:text-gray-300 leading-relaxed">
+                  Download the official 64-bit NSIS setup installer for Windows 10 &amp; 11 PCs.
+                </p>
+                <div className="pt-1">
+                  <a
+                    href={OFFICIAL_DISTRIBUTION.downloads.windows.latestUrl}
+                    download={OFFICIAL_DISTRIBUTION.downloads.windows.fileName}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => {
+                      toast.info('Downloading DailyFresh-Setup.exe', {
+                        description: 'Run the installer once downloaded to install Daily Fresh ERP on your PC. (Note: Downloading is not installing).',
+                        duration: 8000,
+                      });
+                    }}
+                    className="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-white bg-red-600 hover:bg-red-700 shadow-md shadow-red-600/20 active:scale-[0.98] transition-all flex items-center justify-center gap-2 text-center"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Download DailyFresh-Setup.exe</span>
+                  </a>
+                </div>
+                <p className="text-[10px] text-amber-700 dark:text-amber-400 font-medium leading-tight">
+                  Note: Downloading the installer does not mean the app is installed. Run the setup file on your PC to complete installation.
+                </p>
+              </div>
+
               <p className="text-xs font-bold text-[var(--color-text-main)] uppercase tracking-wider">
-                How to Install on Windows PC (Chrome / Edge)
+                Or Install via Windows Browser (Chrome / Edge)
               </p>
               <ol className="space-y-2.5 text-xs text-[var(--color-text-main)]">
                 <li className="flex items-start gap-3 p-3 rounded-2xl bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-800">

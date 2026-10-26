@@ -1,15 +1,15 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { IndianRupee, AlertCircle, Package, FileText, Clock, CheckCircle2 } from 'lucide-react';
+import { IndianRupee, AlertCircle, Package, FileText, CheckCircle2 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { monthlyRevenueData, DIVISION_LABELS } from '../../types';
 import { useDataStore } from '../../stores/dataStore';
 import { format } from 'date-fns';
 import { PageHeader, StatCard, Card, DataTable, Badge, type Column } from '../../components/ui';
-import { formatCurrency, cn, getProductDivision } from '../../lib/utils';
+import { formatCurrency, getProductDivision } from '../../lib/utils';
 import { useAuthStore } from '../../stores/authStore';
 import { useDivisionStore } from '../../stores/divisionStore';
-import { getClientOutstanding, getClientMetrics, getPendingCollections, type PendingCollectionRow } from '../../lib/billing';
+import { getClientOutstanding, getClientCredit, getClientMetrics, getPendingCollections } from '../../lib/billing';
+import StaffDashboard from './StaffDashboard';
 
 
 export default function DashboardPage() {
@@ -53,11 +53,8 @@ export default function DashboardPage() {
     
     // Outstanding receivables across all clients (money owed to business)
     const outstandingAmount = activeClientsList.reduce((sum, c) => sum + Math.max(0, getClientOutstanding(c.id, activeTab)), 0);
-    // Total advance credits held for clients (negative balances / overpayments)
-    const totalAdvanceCredits = activeClientsList.reduce((sum, c) => {
-      const bal = getClientOutstanding(c.id, activeTab);
-      return sum + (bal < 0 ? Math.abs(bal) : 0);
-    }, 0);
+    // Total advance credits held for clients (dedicated credit tracking)
+    const totalAdvanceCredits = activeClientsList.reduce((sum, c) => sum + getClientCredit(c.id, activeTab), 0);
 
     const map = new Map<string, { name: string, orders: number, revenue: number, thisMonthRev: number, lastMonthRev: number, trend: number }>();
     const { ledger } = useDataStore.getState();
@@ -187,50 +184,8 @@ export default function DashboardPage() {
     },
   ];
 
-  if (user?.role === 'delivery_staff') {
-    return (
-      <div className="max-w-4xl mx-auto space-y-8">
-        <PageHeader
-          title={`Welcome back, ${user?.displayName || user?.name} 👋`}
-          description="Here's a summary of the business operations."
-        />
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard
-            label="Today's Orders"
-            value={todaysOrders.toString()}
-            icon={<Package className="w-5 h-5" />}
-          />
-          <StatCard
-            label="Total Clients"
-            value={totalClients.toString()}
-            icon={<FileText className="w-5 h-5" />}
-          />
-          <StatCard
-            label="Today's Revenue"
-            value={formatCurrency(todaysRevenue)}
-            icon={<IndianRupee className="w-5 h-5" />}
-            iconBg="bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400"
-          />
-          <StatCard
-            label="Outstanding Amount"
-            value={formatCurrency(outstandingAmount)}
-            subtitle={totalAdvanceCredits > 0 ? `${formatCurrency(totalAdvanceCredits)} in client credits` : undefined}
-            icon={outstandingAmount > 0 ? <AlertCircle className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
-            iconBg={outstandingAmount > 0 ? "bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400" : "bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400"}
-          />
-        </div>
-        <Card padding={false}>
-          <div className="px-6 pt-6 pb-4 sm:px-8 sm:pt-8 border-b border-gray-100 dark:border-white/[0.05]">
-            <h2 className="text-lg font-semibold text-[var(--color-text-main)] tracking-tight">Recent Orders</h2>
-          </div>
-          <DataTable
-            columns={orderColumns}
-            data={activeOrders.slice(0, 10)}
-            keyExtractor={r => r.id}
-          />
-        </Card>
-      </div>
-    );
+  if (user?.role !== 'admin') {
+    return <StaffDashboard />;
   }
 
   return (
@@ -243,7 +198,7 @@ export default function DashboardPage() {
       </div>
 
       {user?.role === 'admin' && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <StatCard
           label="Today's Revenue"
           value={formatCurrency(todaysRevenue)}
@@ -282,7 +237,7 @@ export default function DashboardPage() {
             </p>
           </div>
           
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs font-semibold text-[var(--color-text-muted)] whitespace-nowrap">Filter by date:</span>
             <input
               type="date"
@@ -386,18 +341,18 @@ export default function DashboardPage() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:gap-8 items-stretch">
         {/* Chart */}
         <Card className="col-span-1 lg:col-span-2 flex flex-col h-full" padding={false}>
-          <div className="px-8 pt-8 pb-4 flex items-center justify-between">
+          <div className="px-4 sm:px-8 pt-6 sm:pt-8 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h2 className="text-lg font-semibold text-[var(--color-text-main)] tracking-tight">Revenue Overview</h2>
               <p className="text-sm font-medium text-[var(--color-text-muted)] mt-1">Last 30 days performance</p>
             </div>
-            <select className="bg-gray-50 dark:bg-gray-800 border-none text-sm font-semibold text-gray-700 dark:text-gray-300 rounded-xl px-4 py-2 outline-none focus:ring-2 focus:ring-[var(--color-primary)] appearance-none cursor-pointer">
+            <select className="bg-gray-50 dark:bg-gray-800 border-none text-sm font-semibold text-gray-700 dark:text-gray-300 rounded-xl px-4 py-2 outline-none focus:ring-2 focus:ring-[var(--color-primary)] appearance-none cursor-pointer self-start sm:self-auto">
               <option>This Month</option>
               <option>Last Month</option>
               <option>This Year</option>
             </select>
           </div>
-          <div className="flex-1 min-h-[350px] px-4 pb-6 mt-4">
+          <div className="flex-1 min-h-[300px] sm:min-h-[350px] px-2 sm:px-4 pb-6 mt-4">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={monthlyRev} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <defs>
@@ -418,11 +373,11 @@ export default function DashboardPage() {
 
         {/* Top Clients */}
         <Card padding={false} className="flex flex-col h-full">
-          <div className="px-8 pt-8 pb-4 border-b border-black/[0.04] dark:border-white/[0.05]">
+          <div className="px-4 sm:px-8 pt-6 sm:pt-8 pb-4 border-b border-black/[0.04] dark:border-white/[0.05]">
             <h2 className="text-lg font-semibold text-[var(--color-text-main)] tracking-tight">Top Clients</h2>
             <p className="text-sm font-medium text-[var(--color-text-muted)] mt-1">By revenue contribution</p>
           </div>
-          <div className="flex-1 overflow-y-auto px-8 py-4 space-y-6">
+          <div className="flex-1 overflow-y-auto px-4 sm:px-8 py-4 space-y-6">
             {computedTopClients.map((client, i) => (
               <div key={client.name} className="flex items-center gap-4 group">
                 <div className="w-8 h-8 rounded-full bg-gray-50 dark:bg-gray-800 flex items-center justify-center text-xs font-bold text-gray-500 shrink-0">
@@ -445,7 +400,7 @@ export default function DashboardPage() {
       </div>
 
       <Card padding={false}>
-        <div className="px-8 pt-8 pb-4 border-b border-black/[0.04] dark:border-white/[0.05]">
+        <div className="px-4 sm:px-8 pt-6 sm:pt-8 pb-4 border-b border-black/[0.04] dark:border-white/[0.05]">
           <h2 className="text-lg font-semibold text-[var(--color-text-main)] tracking-tight">Recent Orders</h2>
           <p className="text-sm font-medium text-[var(--color-text-muted)] mt-1">Latest transactions across all clients</p>
         </div>
