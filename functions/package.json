@@ -1,0 +1,25 @@
+{
+  "name": "daily-fresh-functions",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Daily Fresh ERP — Trusted Cloud Functions for Daily Expense Tracker",
+  "main": "lib/index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.7.0",
+    "firebase-functions": "^5.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
