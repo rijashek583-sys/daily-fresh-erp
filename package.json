@@ -1,14 +1,27 @@
 {
   "name": "daily-fresh-app",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.10",
+  "buildId": "v1.0.10-20261025-r1",
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
+    "test": "vitest run",
+    "test:rules:emulator": "firebase emulators:exec --project demo-daily-fresh-rules-test --config emulator/firebase.financial.local.json --only firestore \"node --test emulator/rules.staged.test.mjs\"",
+    "manifest:generate": "node scripts/update-version-manifest.cjs",
+    "prebuild": "node scripts/update-version-manifest.cjs",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "prepare": "husky"
+    "prepare": "husky",
+    "deploy:hosting": "npm run build && npx firebase-tools deploy --only hosting",
+    "deploy:hosting:safe": "node scripts/deploy-hosting-safe.cjs",
+    "cap:sync": "npm run build && npx cap sync android",
+    "build:android": "npm run cap:sync && powershell -Command \"$env:JAVA_HOME = 'C:\\Program Files\\Android\\Android Studio\\jbr'; $env:ANDROID_HOME = '$env:LOCALAPPDATA\\Android\\Sdk'; .\\android\\gradlew.bat -p android assembleDebug\"",
+    "build:android:release": "npm run cap:sync && powershell -Command \"$env:JAVA_HOME = 'C:\\Program Files\\Android\\Android Studio\\jbr'; $env:ANDROID_HOME = '$env:LOCALAPPDATA\\Android\\Sdk'; .\\android\\gradlew.bat -p android assembleRelease; New-Item -ItemType Directory -Force -Path release; Copy-Item 'android\\app\\build\\outputs\\apk\\release\\DailyFresh.apk' -Destination 'release\\DailyFresh.apk' -Force\"",
+    "electron:start": "electron .",
+    "build:windows": "npm run build && electron-builder --config electron-builder.json --win"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.2",
@@ -41,16 +54,22 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "5.0.2",
     "@tailwindcss/vite": "^4.3.2",
     "@types/node": "^24.13.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3",
+    "exceljs": "^4.4.0",
+    "firebase-tools": "15.34.1",
     "husky": "^9.1.7",
     "oxlint": "^1.71.0",
     "tailwindcss": "^4.3.2",
     "typescript": "~6.0.2",
     "vite": "^8.1.1",
-    "vite-plugin-pwa": "^1.3.0"
+    "vite-plugin-pwa": "^1.3.0",
+    "vitest": "^5.0.5"
   }
 }
