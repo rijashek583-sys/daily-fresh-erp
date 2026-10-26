@@ -1,127 +1,272 @@
 rules_version = '2';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Daily Fresh ERP — Firestore Security Rules
+// Daily Fresh ERP — Staged Financial Security Rules (PHASE 2 CUTOVER)
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Role hierarchy (stored in /users/{uid}.role):
-//   admin        → full read/write access to all collections
-//   staff        → read + limited write (payments, billing view)
-//   delivery_staff → read-only on specific delivery-related data
+// STATUS: STAGED / PREPARED — DO NOT DEPLOY TO PRODUCTION DIRECTLY.
 //
-// DEPLOYMENT:
-//   firebase deploy --only firestore:rules
+// COORDINATED CUTOVER PREREQUISITES:
+// 1. All active client sessions must receive the updated client bundle with:
+//    - Mandatory durable operation-specific idempotency keys.
+//    - Proportional Primary/Bakery payment allocation persistence.
+//    - Atomic customer balance updates and monotonic financialRevision tracking.
+// 2. Offline queues from older client versions must be drained to avoid rejecting
+//    in-flight legacy transactions.
+// 3. Deploy Cloud Functions and staged rules only after explicit release approval.
 //
-// TESTING (recommended before deploying):
-//   firebase emulators:start --only firestore
-//   then run: firebase emulators:exec --only firestore "npx jest"
+// DIRECT FINANCIAL WRITERS PROTECTED BY THIS POLICY:
+// - /payments: Direct non-proportional payment creation blocked.
+// - /payments: Duplicate submissions without durable idempotency keys blocked.
+// - /payments: Sum invariant enforced (primaryAllocated + bakeryAllocated == amount).
+// - /orders: Direct arbitrary status/paidAmount edits restricted.
+// - /clients: Balance aggregate tampering protected with financialRevision checks.
+// - /ledger: Payment debits/credits protected with immutable historical constraints.
+//
 // ─────────────────────────────────────────────────────────────────────────────
 
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ── Helper functions ───────────────────────────────────────────────────
+    // ── Authentication & Authorization Helpers ──────────────────────────────
 
-    /** Returns true when the request carries a valid Firebase Auth token. */
     function isAuthenticated() {
       return request.auth != null;
     }
 
-    /**
-     * Fetches the caller's role from /users/{uid}.
-     * The role field is set at user creation and only writeable by admins.
-     */
+    function getUserDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isExistingUser() {
+      return isAuthenticated() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isActiveUser() {
+      return isExistingUser() && getUserDoc().get('status', 'active') == 'active';
+    }
+
     function getRole() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+      return getUserDoc().role;
     }
 
     function isAdmin() {
-      return isAuthenticated() && getRole() == 'admin';
+      return isActiveUser() && getRole() == 'admin';
     }
 
     function isStaff() {
-      return isAuthenticated() && getRole() in ['admin', 'staff'];
+      return isActiveUser() && (getRole() == 'admin' || getRole() == 'staff' || getRole() == 'delivery_staff');
     }
 
-    function isDeliveryStaff() {
-      return isAuthenticated() && getRole() in ['admin', 'staff', 'delivery_staff'];
+    function isValidIdempotencyKey(key) {
+      return key is string && key.size() >= 8 && key.size() <= 128;
     }
 
-    // ── /users ────────────────────────────────────────────────────────────
-    // Users can read their own profile. Only admins can write user records.
+    // ── /users ──────────────────────────────────────────────────────────────
     match /users/{uid} {
       allow read: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
-      allow create: if isAdmin();
-      allow update: if isAdmin();
-      allow delete: if isAdmin();
+      allow create, update, delete: if isAdmin();
     }
 
-    // ── /clients ──────────────────────────────────────────────────────────
-    // Staff (and admins) can view clients. Only admins can create/update/delete.
+    // ── /clients ────────────────────────────────────────────────────────────
     match /clients/{clientId} {
-      allow read:   if isStaff();
-      allow create: if isAdmin();
-      allow update: if isAdmin();
-      allow delete: if isAdmin();
+      allow read: if isStaff();
+      allow create, delete: if isAdmin();
+      allow update: if (
+        // Case 1: Admin updating customer profile fields (name, phone, region, status, notes, address, discount, openingBalance)
+        // Must NEVER alter server-owned financial balances or financialRevision directly from the client.
+        isAdmin() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name',
+          'phone',
+          'region',
+          'regionName',
+          'status',
+          'notes',
+          'address',
+          'discount',
+          'openingBalance',
+          'openingBalanceAmount',
+          'primaryTotals',
+          'bakeryTotals',
+          'updatedAt'
+        ]) &&
+        request.resource.data.get('financialRevision', 0) == resource.data.get('financialRevision', 0) &&
+        request.resource.data.get('totalPaid', 0) == resource.data.get('totalPaid', 0) &&
+        // Protect nested financial fields in primaryTotals from Admin profile changes
+        request.resource.data.get('primaryTotals', {}).get('totalRevenue', 0) == resource.data.get('primaryTotals', {}).get('totalRevenue', 0) &&
+        request.resource.data.get('primaryTotals', {}).get('totalPaid', 0) == resource.data.get('primaryTotals', {}).get('totalPaid', 0) &&
+        request.resource.data.get('primaryTotals', {}).get('outstanding', 0) == resource.data.get('primaryTotals', {}).get('outstanding', 0) &&
+        request.resource.data.get('primaryTotals', {}).get('credit', 0) == resource.data.get('primaryTotals', {}).get('credit', 0) &&
+        request.resource.data.get('primaryTotals', {}).get('rawBalance', 0) == resource.data.get('primaryTotals', {}).get('rawBalance', 0) &&
+        request.resource.data.get('primaryTotals', {}).get('totalOrders', 0) == resource.data.get('primaryTotals', {}).get('totalOrders', 0) &&
+        // Protect nested financial fields in bakeryTotals from Admin profile changes
+        request.resource.data.get('bakeryTotals', {}).get('totalRevenue', 0) == resource.data.get('bakeryTotals', {}).get('totalRevenue', 0) &&
+        request.resource.data.get('bakeryTotals', {}).get('totalPaid', 0) == resource.data.get('bakeryTotals', {}).get('totalPaid', 0) &&
+        request.resource.data.get('bakeryTotals', {}).get('outstanding', 0) == resource.data.get('bakeryTotals', {}).get('outstanding', 0) &&
+        request.resource.data.get('bakeryTotals', {}).get('credit', 0) == resource.data.get('bakeryTotals', {}).get('credit', 0) &&
+        request.resource.data.get('bakeryTotals', {}).get('rawBalance', 0) == resource.data.get('bakeryTotals', {}).get('rawBalance', 0) &&
+        request.resource.data.get('bakeryTotals', {}).get('totalOrders', 0) == resource.data.get('bakeryTotals', {}).get('totalOrders', 0)
+      ) || (
+        // Case 2: Aggregate synchronization during client-side order creation/editing (verifyAndSyncClientTotals).
+        // Strictly whitelisted to revenue/orders/outstanding. Server-owned financialRevision and totalPaid are LOCKED.
+        isStaff() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'totalRevenue',
+          'totalPaid',
+          'outstanding',
+          'credit',
+          'availableCredit',
+          'generalCredit',
+          'primaryCredit',
+          'bakeryCredit',
+          'rawBalance',
+          'totalOrders',
+          'openingBalanceAmount',
+          'primaryTotals',
+          'bakeryTotals',
+          'financialRevision',
+          'updatedAt'
+        ]) &&
+        request.resource.data.get('financialRevision', 0) == resource.data.get('financialRevision', 0) &&
+        request.resource.data.get('totalPaid', 0) == resource.data.get('totalPaid', 0) &&
+        request.resource.data.get('primaryTotals', {}).get('totalPaid', 0) == resource.data.get('primaryTotals', {}).get('totalPaid', 0) &&
+        request.resource.data.get('bakeryTotals', {}).get('totalPaid', 0) == resource.data.get('bakeryTotals', {}).get('totalPaid', 0) &&
+        // Subtotal and Grand Total reconciliation (Canonical Division Rules)
+        request.resource.data.get('totalRevenue', 0) == (request.resource.data.get('primaryTotals', {}).get('totalRevenue', 0) + request.resource.data.get('bakeryTotals', {}).get('totalRevenue', 0)) &&
+        request.resource.data.get('openingBalanceAmount', 0) == (request.resource.data.get('primaryTotals', {}).get('openingBalance', 0) + request.resource.data.get('bakeryTotals', {}).get('openingBalance', 0)) &&
+        request.resource.data.get('totalPaid', 0) == (request.resource.data.get('primaryTotals', {}).get('totalPaid', 0) + request.resource.data.get('bakeryTotals', {}).get('totalPaid', 0)) &&
+        // Credit consistency
+        request.resource.data.get('primaryCredit', 0) == 0 &&
+        request.resource.data.get('bakeryCredit', 0) == 0 &&
+        request.resource.data.get('primaryTotals', {}).get('credit', 0) == 0 &&
+        request.resource.data.get('bakeryTotals', {}).get('credit', 0) == 0 &&
+        request.resource.data.get('generalCredit', 0) == request.resource.data.get('credit', 0) &&
+        request.resource.data.get('availableCredit', 0) == request.resource.data.get('credit', 0) &&
+        request.resource.data.get('primaryTotals', {}).get('generalCredit', 0) == request.resource.data.get('credit', 0) &&
+        request.resource.data.get('bakeryTotals', {}).get('generalCredit', 0) == request.resource.data.get('credit', 0) &&
+        // Total orders reconciliation
+        request.resource.data.get('totalOrders', 0) == (request.resource.data.get('primaryTotals', {}).get('totalOrders', 0) + request.resource.data.get('bakeryTotals', {}).get('totalOrders', 0)) &&
+        // Anti-forgery: Changing unrelated counters like totalOrders CANNOT forge credit, outstanding, or rawBalance.
+        // Financial balances may only change when totalRevenue or openingBalanceAmount changes.
+        (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['credit', 'availableCredit', 'generalCredit', 'outstanding', 'rawBalance']) ||
+          request.resource.data.diff(resource.data).affectedKeys().hasAny(['totalRevenue', 'openingBalanceAmount'])
+        ) &&
+        // Nested financial balances in primaryTotals/bakeryTotals may only change when their division revenue/opening changes
+        (
+          request.resource.data.get('primaryTotals', {}).get('rawBalance', 0) == resource.data.get('primaryTotals', {}).get('rawBalance', 0) ||
+          request.resource.data.get('primaryTotals', {}).get('totalRevenue', 0) != resource.data.get('primaryTotals', {}).get('totalRevenue', 0) ||
+          request.resource.data.get('primaryTotals', {}).get('openingBalance', 0) != resource.data.get('primaryTotals', {}).get('openingBalance', 0)
+        ) &&
+        (
+          request.resource.data.get('bakeryTotals', {}).get('rawBalance', 0) == resource.data.get('bakeryTotals', {}).get('rawBalance', 0) ||
+          request.resource.data.get('bakeryTotals', {}).get('totalRevenue', 0) != resource.data.get('bakeryTotals', {}).get('totalRevenue', 0) ||
+          request.resource.data.get('bakeryTotals', {}).get('openingBalance', 0) != resource.data.get('bakeryTotals', {}).get('openingBalance', 0)
+        )
+      );
     }
 
-    // ── /products ─────────────────────────────────────────────────────────
-    // Staff need product list for order creation. Only admins manage catalogue.
+    // ── /products ───────────────────────────────────────────────────────────
     match /products/{productId} {
-      allow read:   if isStaff();
-      allow create: if isAdmin();
-      allow update: if isAdmin();
-      allow delete: if isAdmin();
+      allow read: if isStaff();
+      allow create, update, delete: if isAdmin();
     }
 
-    // ── /orders ───────────────────────────────────────────────────────────
-    // Staff can read and create orders (e.g. direct sales). Only admins delete.
+    // ── /orders ─────────────────────────────────────────────────────────────
     match /orders/{orderId} {
-      allow read:   if isStaff();
-      allow create: if isStaff();
-      allow update: if isStaff();
+      allow read: if isStaff();
+      // On create: Direct creation of orders with paidAmount > 0 is forbidden (direct sales with payments must be created server-side)
+      allow create: if isStaff() && request.resource.data.get('paidAmount', 0) == 0;
+      // On update: paidAmount cannot be altered from the client regardless of Admin/Staff role.
+      // If paidAmount > 0, paymentStatus is server-authoritative and cannot be directly modified.
+      allow update: if isStaff() &&
+        request.resource.data.get('paidAmount', 0) == resource.data.get('paidAmount', 0) &&
+        (
+          resource.data.get('paidAmount', 0) == 0 ||
+          request.resource.data.get('paymentStatus', '') == resource.data.get('paymentStatus', '')
+        );
       allow delete: if isAdmin();
     }
 
-    // ── /payments ─────────────────────────────────────────────────────────
-    // Both staff and admin can record payments. Deletion is admin-only.
+    // ── /payments (COORDINATED CUTOVER RULE) ───────────────────────────────────
+    // Phase 2 Final Cutover:
+    // - Direct client payment creation is permanently BLOCKED regardless of role.
+    // - All payments MUST be created via trusted recordPayment Cloud Function.
+    // - Direct client deletion is permanently BLOCKED regardless of role.
+    // - Admin metadata-only updates (notes, reference, updatedAt) permitted without altering financial fields.
     match /payments/{paymentId} {
-      allow read:   if isStaff();
-      allow create: if isStaff();
-      allow update: if isStaff();
-      allow delete: if isAdmin();
+      allow read: if isStaff();
+      allow create, delete: if false;
+      allow update: if isAdmin() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['notes', 'reference', 'updatedAt']) &&
+        request.resource.data.amount == resource.data.amount &&
+        request.resource.data.idempotencyKey == resource.data.idempotencyKey;
     }
 
-    // ── /clientPricing ────────────────────────────────────────────────────
-    // Staff need pricing data to calculate bills. Only admins set prices.
-    match /clientPricing/{clientId} {
-      allow read:   if isStaff();
-      allow write:  if isAdmin();
-    }
-
-    // ── /ledger ───────────────────────────────────────────────────────────
-    // Ledger is read-only for staff. Writes happen only via server transactions
-    // triggered by admin actions (addOrder / recordPayment).
+    // ── /ledger ─────────────────────────────────────────────────────────────
+    // Phase 2 Final Cutover:
+    // - Clients may ONLY create 'invoice' ledger entries during order creation, or Admin creating 'opening_balance'.
+    // - Direct client creation, modification, or deletion of 'payment' ledger entries is permanently BLOCKED regardless of Admin/Staff role.
+    // - Payment ledger entries are authored exclusively by the trusted backend Cloud Functions.
+    // - Invoice ledger entries cannot have negative amounts, cannot contain paymentId, and must be tied to an order.
     match /ledger/{entryId} {
-      allow read:   if isStaff();
-      allow create: if isStaff();   // written by recordPaymentAtomic (staff-allowed)
-      allow update: if isAdmin();
-      allow delete: if isAdmin();
+      allow read: if isStaff();
+      allow create: if (
+        (
+          isStaff() &&
+          request.resource.data.type == 'invoice' &&
+          request.resource.data.get('amount', 0) >= 0 &&
+          request.resource.data.get('invoiceId', '') is string &&
+          request.resource.data.get('invoiceId', '').size() > 0 &&
+          !('paymentId' in request.resource.data)
+        ) ||
+        (
+          isAdmin() &&
+          request.resource.data.type == 'opening_balance' &&
+          request.resource.data.get('amount', 0) >= 0 &&
+          !('paymentId' in request.resource.data) &&
+          !('invoiceId' in request.resource.data)
+        )
+      );
+      allow update: if (
+        (
+          isStaff() &&
+          resource.data.type == 'invoice' &&
+          request.resource.data.type == 'invoice' &&
+          request.resource.data.get('amount', 0) >= 0 &&
+          !('paymentId' in request.resource.data)
+        ) ||
+        (
+          isAdmin() &&
+          resource.data.type == 'opening_balance' &&
+          request.resource.data.type == 'opening_balance' &&
+          request.resource.data.get('amount', 0) >= 0 &&
+          !('paymentId' in request.resource.data)
+        )
+      );
+      allow delete: if (
+        (isStaff() && resource.data.type == 'invoice') ||
+        (isAdmin() && resource.data.type == 'opening_balance')
+      );
     }
 
-    // ── /config ───────────────────────────────────────────────────────────
-    // App-wide config (regions, company info). Staff read; admin write.
-    match /config/{docId} {
-      allow read:  if isStaff();
+    // ── /clientPricing ──────────────────────────────────────────────────────
+    match /clientPricing/{clientId} {
+      allow read: if isStaff();
       allow write: if isAdmin();
     }
 
-    // ── /trash ────────────────────────────────────────────────────────────
-    // Only admins can see and manage the trash bin.
+    // ── /config ─────────────────────────────────────────────────────────────
+    match /config/{docId} {
+      allow read: if isStaff();
+      allow write: if isAdmin();
+    }
+
+    // ── /trash ──────────────────────────────────────────────────────────────
     match /trash/{docId} {
-      allow read:   if isAdmin();
-      allow create: if isAdmin();
-      allow delete: if isAdmin();
+      allow read: if isStaff();
+      allow write: if isAdmin();
     }
 
     // ── Stock & Production Collections ──────────────────────────────────────
@@ -129,31 +274,46 @@ service cloud.firestore {
       allow read: if isStaff();
       allow write: if isAdmin();
     }
+
     match /rawMaterialTransactions/{docId} {
       allow read: if isStaff();
       allow write: if isAdmin();
     }
+
     match /productMaterials/{docId} {
       allow read: if isStaff();
       allow write: if isAdmin();
     }
+
     match /productions/{docId} {
       allow read: if isStaff();
       allow write: if isAdmin();
     }
+
     match /finishedStockTransactions/{docId} {
       allow read: if isStaff();
       allow create: if isStaff();
-      allow update: if isAdmin();
-      allow delete: if isAdmin();
+      allow update, delete: if isAdmin();
     }
+
     match /stockSyncStatus/{docId} {
       allow read: if isStaff();
       allow create, update: if isStaff();
       allow delete: if isAdmin();
     }
 
-    // ── Deny everything else ──────────────────────────────────────────────
+    // ── Daily Expense Tracker Collections ───────────────────────────────────
+    match /adminNames/{nameId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /expenses/{expenseId} {
+      allow read: if isAdmin() || (isStaff() && resource.data.createdBy == request.auth.uid);
+      allow write: if false;
+    }
+
+    // ── Deny everything else ────────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;
     }

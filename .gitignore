@@ -35,3 +35,13 @@ yarn-error.log*
 
 # TypeScript build info
 *.tsbuildinfo
+
+# Release Artifacts & Keystores (Never commit signing keys!)
+release/
+*.keystore
+*.jks
+android/app/release/
+android/app/*.keystore
+android/app/*.jks
+android/key.properties
+

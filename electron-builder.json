@@ -1,0 +1,39 @@
+{
+  "appId": "com.dailyfresh.erp",
+  "productName": "Daily Fresh ERP",
+  "copyright": "Copyright © 2026 Daily Fresh",
+  "directories": {
+    "output": "release"
+  },
+  "asar": true,
+  "nodeGypRebuild": false,
+  "npmRebuild": false,
+  "files": [
+    "dist/**/*",
+    "electron/**/*",
+    "package.json",
+    "!node_modules/**/*"
+  ],
+  "extraMetadata": {
+    "dependencies": {}
+  },
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+    "artifactName": "DailyFresh-Setup.${ext}",
+    "icon": "public/icon.ico"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "Daily Fresh ERP"
+  }
+}

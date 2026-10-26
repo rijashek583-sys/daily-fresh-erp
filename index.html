@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 
     <!-- SEO -->
     <title>Daily Fresh</title>
@@ -15,11 +15,42 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Daily Fresh" />
     <meta name="application-name" content="Daily Fresh ERP" />
-    <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192x192.png" />
     <link rel="icon" type="image/png" sizes="512x512" href="/icon-512x512.png" />
+
+    <!-- Immediate PWA Prompt & Install State Capture -->
+    <script>
+      (function() {
+        window.__dfPwaPrompt = null;
+        window.__dfPwaInstalled = false;
+        try {
+          if (
+            localStorage.getItem('df_pwa_installed') === 'true' ||
+            window.matchMedia('(display-mode: standalone)').matches ||
+            window.navigator.standalone === true
+          ) {
+            window.__dfPwaInstalled = true;
+          }
+        } catch (e) {}
+
+        window.addEventListener('beforeinstallprompt', function(e) {
+          e.preventDefault();
+          window.__dfPwaPrompt = e;
+          window.dispatchEvent(new CustomEvent('df-pwa-prompt-available', { detail: e }));
+        });
+
+        window.addEventListener('appinstalled', function() {
+          window.__dfPwaPrompt = null;
+          window.__dfPwaInstalled = true;
+          try {
+            localStorage.setItem('df_pwa_installed', 'true');
+          } catch (e) {}
+          window.dispatchEvent(new CustomEvent('df-pwa-installed'));
+        });
+      })();
+    </script>
 
     <!-- Inter font preconnect -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />

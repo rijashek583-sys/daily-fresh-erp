@@ -30,6 +30,7 @@ export default defineConfig({
         orientation: 'any',
         start_url: '/',
         scope: '/',
+        prefer_related_applications: false,
         icons: [
           {
             src: '/icon-192x192.png',
@@ -60,6 +61,7 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         cleanupOutdatedCaches: true,
         clientsClaim: true,
         skipWaiting: true,
@@ -72,5 +74,9 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
+  },
+  test: {
+    environment: 'node',
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
   },
 });
